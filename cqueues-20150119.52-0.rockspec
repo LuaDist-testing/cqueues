@@ -1,10 +1,10 @@
 -- This file was automatically generated for the LuaDist project.
 
 package = "cqueues"
-version = "20150119.51-1"
+version = "20150119.52-0"
 -- LuaDist source
 source = {
-  tag = "20150119.51-1",
+  tag = "20150119.52-0",
   url = "git://github.com/LuaDist-testing/cqueues.git"
 }
 -- Original source
@@ -16,7 +16,6 @@ description = {
    summary = "Continuation Queues: Embeddable asynchronous networking, threading, and notification framework for Lua on Unix.";
    homepage = "http://25thandclement.com/~william/projects/cqueues.html";
    license = "MIT/X11";
-   maintainer = "Daurnimator <quae@daurnimator.com>";
 }
 supported_platforms = {
    "linux";
@@ -24,25 +23,22 @@ supported_platforms = {
    "solaris";
 }
 dependencies = {
-   "lua == 5.1";
+   "lua == 5.2";
 }
 build = {
    type = "make";
    makefile = "GNUmakefile";
 
-   build_target = "all5.1";
+   build_target = "all5.2";
    build_variables = {
       CFLAGS = "$(CFLAGS)";
-      bindir = "$(LUA_BINDIR)";
-      includedir = "$(LUA_INCDIR)";
-      libdir = "$(LUA_LIBDIR)";
    };
 
-   install_target = "install5.1";
+   install_target = "install5.2";
    install_variables = {
       prefix = "$(PREFIX)";
-      lua51cpath = "$(LIBDIR)";
-      lua51path = "$(LUADIR)";
+      lua52cpath = "$(LIBDIR)";
+      lua52path = "$(LUADIR)";
       bindir = "$(BINDIR)";
    };
 }
