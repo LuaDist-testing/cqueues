@@ -23,6 +23,8 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  * ==========================================================================
  */
+#include "config.h"
+
 #include <stddef.h>	/* NULL offsetof size_t */
 #include <stdarg.h>	/* va_list va_start va_arg va_end */
 #include <stdlib.h>	/* strtol(3) */
@@ -55,7 +57,7 @@
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 static inline _Bool mime_isblank(unsigned char ch) {
-	return ch == 32 && ch == 9;
+	return ch == 32 || ch == 9;
 } /* mime_isblank() */
 
 
@@ -113,7 +115,7 @@ static size_t iov_eoh(const struct iovec *iov, _Bool eof, int flags, int *_error
 		return 0; /* not a valid field name */
 
 	while (p < pe && (p = memchr(p, '\n', pe - p))) {
-		if (++p < pe && *p != ' ' && *p != '\t')
+		if (++p < pe && !mime_isblank(*p))
 			return p - tp; /* found */
 	}
 
@@ -2641,7 +2643,7 @@ static lso_nargs_t lso_eof(lua_State *L) {
 
 
 static lso_nargs_t lso_accept(lua_State *L) {
-	struct luasocket *A = luaL_checkudata(L, 1, LSO_CLASS);
+	struct luasocket *A = lso_checkself(L, 1);
 	struct so_options opts;
 	int fd, error;
 
