@@ -1,10 +1,10 @@
 -- This file was automatically generated for the LuaDist project.
 
 package = "cqueues"
-version = "20161214.51-0"
+version = "20161214.52-0"
 -- LuaDist source
 source = {
-  tag = "20161214.51-0",
+  tag = "20161214.52-0",
   url = "git://github.com/LuaDist-testing/cqueues.git"
 }
 -- Original source
@@ -25,7 +25,7 @@ supported_platforms = {
 	"solaris";
 }
 dependencies = {
-	"lua == 5.1";
+	"lua == 5.2";
 }
 external_dependencies = {
 	OPENSSL = {
@@ -41,7 +41,7 @@ build = {
 	type = "make";
 	makefile = "GNUmakefile";
 
-	build_target = "all5.1";
+	build_target = "all5.2";
 	build_variables = {
 		CPPFLAGS= '-I"$(OPENSSL_INCDIR)" -I"$(CRYPTO_INCDIR)"';
 		CFLAGS = '$(CFLAGS)';
@@ -51,11 +51,11 @@ build = {
 		libdir = "$(LUA_LIBDIR)";
 	};
 
-	install_target = "install5.1";
+	install_target = "install5.2";
 	install_variables = {
 		prefix = "$(PREFIX)";
-		lua51cpath = "$(LIBDIR)";
-		lua51path = "$(LUADIR)";
+		lua52cpath = "$(LIBDIR)";
+		lua52path = "$(LUADIR)";
 		bindir = "$(BINDIR)";
 	};
 }
