@@ -1,10 +1,10 @@
 -- This file was automatically generated for the LuaDist project.
 
 package = "cqueues"
-version = "20160812.51-0"
+version = "20160812.51-1"
 -- LuaDist source
 source = {
-  tag = "20160812.51-0",
+  tag = "20160812.51-1",
   url = "git://github.com/LuaDist-testing/cqueues.git"
 }
 -- Original source
@@ -43,8 +43,9 @@ build = {
 
 	build_target = "all5.1";
 	build_variables = {
-		CFLAGS = "$(CFLAGS)";
-		LDFLAGS = "$(LDFLAGS)";
+		CPPFLAGS= '-I"$(OPENSSL_INCDIR)" -I"$(CRYPTO_INCDIR)"';
+		CFLAGS = '$(CFLAGS)';
+		LDFLAGS = '$(LIBFLAG) -L"$(OPENSSL_LIBDIR)" -L"$(CRYPTO_LIBDIR)"';
 		bindir = "$(LUA_BINDIR)";
 		includedir = "$(LUA_INCDIR)";
 		libdir = "$(LUA_LIBDIR)";
