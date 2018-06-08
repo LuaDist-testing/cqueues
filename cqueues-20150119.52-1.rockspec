@@ -1,10 +1,10 @@
 -- This file was automatically generated for the LuaDist project.
 
 package = "cqueues"
-version = "20150119.52-0"
+version = "20150119.52-1"
 -- LuaDist source
 source = {
-  tag = "20150119.52-0",
+  tag = "20150119.52-1",
   url = "git://github.com/LuaDist-testing/cqueues.git"
 }
 -- Original source
@@ -16,6 +16,7 @@ description = {
    summary = "Continuation Queues: Embeddable asynchronous networking, threading, and notification framework for Lua on Unix.";
    homepage = "http://25thandclement.com/~william/projects/cqueues.html";
    license = "MIT/X11";
+   maintainer = "Daurnimator <quae@daurnimator.com>";
 }
 supported_platforms = {
    "linux";
@@ -32,6 +33,9 @@ build = {
    build_target = "all5.2";
    build_variables = {
       CFLAGS = "$(CFLAGS)";
+      bindir = "$(LUA_BINDIR)";
+      includedir = "$(LUA_INCDIR)";
+      libdir = "$(LUA_LIBDIR)";
    };
 
    install_target = "install5.2";
