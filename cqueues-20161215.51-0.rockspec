@@ -1,17 +1,17 @@
 -- This file was automatically generated for the LuaDist project.
 
 package = "cqueues"
-version = "20161214.53-0"
+version = "20161215.51-0"
 -- LuaDist source
 source = {
-  tag = "20161214.53-0",
+  tag = "20161215.51-0",
   url = "git://github.com/LuaDist-testing/cqueues.git"
 }
 -- Original source
 -- source = {
--- 	url = "https://github.com/wahern/cqueues/archive/rel-20161214.tar.gz";
--- 	md5 = "9bf621290b1c152fbf5ba4bcc7eb9c3b";
--- 	dir = "cqueues-rel-20161214";
+-- 	url = "https://github.com/wahern/cqueues/archive/rel-20161215.tar.gz";
+-- 	md5 = "3e5bfb9ccb7fa8eea4f5d367dd0fe10a";
+-- 	dir = "cqueues-rel-20161215";
 -- }
 description = {
 	summary = "Continuation Queues: Embeddable asynchronous networking, threading, and notification framework for Lua on Unix.";
@@ -25,7 +25,7 @@ supported_platforms = {
 	"solaris";
 }
 dependencies = {
-	"lua == 5.3";
+	"lua == 5.1";
 }
 external_dependencies = {
 	OPENSSL = {
@@ -41,7 +41,7 @@ build = {
 	type = "make";
 	makefile = "GNUmakefile";
 
-	build_target = "all5.3";
+	build_target = "all5.1";
 	build_variables = {
 		CPPFLAGS= '-I"$(OPENSSL_INCDIR)" -I"$(CRYPTO_INCDIR)"';
 		CFLAGS = '$(CFLAGS)';
@@ -51,11 +51,11 @@ build = {
 		libdir = "$(LUA_LIBDIR)";
 	};
 
-	install_target = "install5.3";
+	install_target = "install5.1";
 	install_variables = {
 		prefix = "$(PREFIX)";
-		lua53cpath = "$(LIBDIR)";
-		lua53path = "$(LUADIR)";
+		lua51cpath = "$(LIBDIR)";
+		lua51path = "$(LUADIR)";
 		bindir = "$(BINDIR)";
 	};
 }
