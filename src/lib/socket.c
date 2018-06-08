@@ -132,6 +132,10 @@ int socket_v_api(void) {
 #define HAVE_SSL_IS_SERVER HAVE_OPENSSL11_API
 #endif
 
+#ifndef HAVE_SSL_UP_REF
+#define HAVE_SSL_UP_REF HAVE_OPENSSL11_API
+#endif
+
 
 /*
  * C O M P A T  R O U T I N E S
@@ -176,12 +180,33 @@ static _Bool compat_SSL_is_server(SSL *ssl) {
 	 *
 	 * Server methods such as TLSv1_2_server_method(), etc. should have
 	 * their .ssl_connect method set to this value.
+	 *
+	 * WARNING: SSL_is_server in OpenSSL 1.1 defaults to server mode
+	 * when both connect and accept methods are present (e.g. as
+	 * returned by SSLv23_method()), whereas we always defaulted to
+	 * client mode. We keep our old logic to avoid breaking any existing
+	 * code that relies on our behavior. Such code will break when
+	 * moving to OpenSSL 1.1, but it would be even more surprising if
+	 * their code broke when the only change was a minor version of
+	 * something using this library.
 	 */
 	if (!method->ssl_connect || method->ssl_connect == SSLv23_server_method()->ssl_connect)
 		return 1;
 
 	return 0;
 } /* compat_SSL_is_server() */
+#endif
+
+#if !HAVE_SSL_UP_REF
+#define SSL_up_ref(...) compat_SSL_up_ref(__VA_ARGS__)
+
+static int compat_SSL_up_ref(SSL *ssl) {
+	/* our caller should already have had a proper reference */
+	if (CRYPTO_add(&ssl->references, 1, CRYPTO_LOCK_SSL) < 2)
+		return 0; /* fail */
+
+	return 1;
+} /* compat_SSL_up_ref() */
 #endif
 
 
@@ -2144,6 +2169,7 @@ static void so_resetssl(struct socket *so) {
 
 int so_starttls(struct socket *so, const struct so_starttls *cfg) {
 	SSL_CTX *ctx, *tmp = NULL;
+	SSL *ssl = NULL;
 	const SSL_METHOD *method;
 	int error;
 
@@ -2178,29 +2204,43 @@ int so_starttls(struct socket *so, const struct so_starttls *cfg) {
 
 	ERR_clear_error();
 
-	if (!(ctx = cfg->context)) {
-		method = (cfg->method)? cfg->method : SSLv23_method();
+	if ((ssl = cfg->instance)) {
+		SSL_up_ref(ssl);
+	} else {
+		if (!(ctx = cfg->context)) {
+			if (!(method = cfg->method)) {
+				if (so_isbool(cfg->accept)) {
+					method = SSLv23_method();
+				} else {
+					method = SSLv23_client_method();
+				}
+			}
 
-		if (!(ctx = tmp = SSL_CTX_new((SSL_METHOD *)method)))
+			if (!(ctx = tmp = SSL_CTX_new((SSL_METHOD *)method)))
+				goto eossl;
+		}
+
+		if (!(ssl = SSL_new(ctx)))
 			goto eossl;
 	}
-
-	if (!(so->ssl.ctx = SSL_new(ctx)))
-		goto eossl;
-
-	SSL_set_mode(so->ssl.ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
-	SSL_set_mode(so->ssl.ctx, SSL_MODE_ENABLE_PARTIAL_WRITE);
 
 	if (so_isbool(cfg->accept)) {
 		so->ssl.accept = so_tobool(cfg->accept);
 	} else {
-		so->ssl.accept = SSL_is_server(so->ssl.ctx);
+		/* NB: see WARNING at compat_SSL_is_server() */
+		so->ssl.accept = SSL_is_server(ssl);
 	}
 
 	if (!so->ssl.accept && so->opts.tls_sendname && so->opts.tls_sendname != SO_OPTS_TLS_HOSTNAME) {
-		if (!SSL_set_tlsext_host_name(so->ssl.ctx, so->opts.tls_sendname))
+		if (!SSL_set_tlsext_host_name(ssl, so->opts.tls_sendname))
 			goto eossl;
 	}
+
+	SSL_set_mode(ssl, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+	SSL_set_mode(ssl, SSL_MODE_ENABLE_PARTIAL_WRITE);
+
+	so->ssl.ctx = ssl;
+	ssl = NULL;
 
 	if (tmp)
 		SSL_CTX_free(tmp);
@@ -2216,6 +2256,9 @@ error:
 	 * so_listen(), but we still need to replay the error.
 	 */
 	so->ssl.error = error;
+
+	if (ssl)
+		SSL_free(ssl);
 
 	if (tmp)
 		SSL_CTX_free(tmp);
@@ -3122,7 +3165,7 @@ void parseurl(const char *url) {
 	regex_t re;
 	regmatch_t match[16];
 	char errstr[128];
-	int error, i;
+	int error;
 	struct { const char *name; char *dst; size_t lim; } part[16] = {
 		[2]  = { "scheme:   ", MAIN.url.scheme,    sizeof MAIN.url.scheme },
 		[4]  = { "authority:", MAIN.url.authority, sizeof MAIN.url.authority },
@@ -3139,7 +3182,7 @@ void parseurl(const char *url) {
 	if ((error = regexec(&re, url, countof(match), match, 0)))
 		goto error;
 
-	for (i = 0; i < countof(match); i++) {
+	for (size_t i = 0; i < countof(match); i++) {
 		if (match[i].rm_so == -1)
 			continue;
 
@@ -3179,7 +3222,7 @@ int httpget(const char *url) {
 	so_connect(so);
 
 	if (!strcasecmp("https", MAIN.url.scheme)) {
-		SSL_CTX *ctx = SSL_CTX_new(SSLv23_method());
+		SSL_CTX *ctx = SSL_CTX_new(SSLv23_client_method());
 
 #if 0 /* example code if waiting for SSL negotiation */
 		while ((error = so_starttls(so, ctx))) {
@@ -3187,7 +3230,7 @@ int httpget(const char *url) {
 				errx(EXIT_FAILURE, "so_starttls: %s", so_strerror(error));
 		}
 #else
-		so_starttls(so, ctx);
+		so_starttls(so, &(struct so_starttls){ .context = ctx });
 #endif
 	}
 
@@ -3265,7 +3308,7 @@ int echo(void) {
 	struct socket *srv0, *srv, *cli;
 	struct fifo out, in;
 	char obuf[512], ibuf[512];
-	long olen, len;
+	size_t olen, len;
 	struct iovec iov;
 	int fd, error;
 
