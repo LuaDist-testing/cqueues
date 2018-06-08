@@ -124,6 +124,8 @@
 #define CQS_NOTIFY "CQS Notify"
 #define CQS_CONDITION "CQS Condition"
 
+#define CQUEUE__POLL ((void *)&cqueue__poll)
+const char *cqueue__poll; // signals multilevel yield
 
 cqs_nargs_t luaopen__cqueues(lua_State *);
 
@@ -224,7 +226,7 @@ static inline int cqs_interpose(lua_State *L, const char *mt) {
 static inline void cqs_pushnils(lua_State *L, int n) {
 	int i;
 
-	luaL_checkstack(L, n, NULL);
+	luaL_checkstack(L, n, "too many arguments");
 
 	for (i = 0; i < n; i++)
 		lua_pushnil(L);
@@ -245,18 +247,16 @@ static inline int cqs_regcount(const luaL_Reg *l) {
 static inline void cqs_newmetatable(lua_State *L, const char *name, const luaL_Reg *methods, const luaL_Reg *metamethods, int nup) {
 	int i;
 
-	if (luaL_newmetatable(L, name)) {
-		for (i = 0; i < nup; i++) /* copy upvalues */
-			lua_pushvalue(L, -nup - 1);
-		luaL_setfuncs(L, metamethods, nup);
+	luaL_newmetatable(L, name);
+	for (i = 0; i < nup; i++) /* copy upvalues */
+		lua_pushvalue(L, -nup - 1);
+	luaL_setfuncs(L, metamethods, nup);
 
-		lua_createtable(L, 0, cqs_regcount(methods));
-		for (i = 0; i < nup; i++) /* copy upvalues */
-			lua_pushvalue(L, -nup - 2);
-		luaL_setfuncs(L, methods, nup);
-		lua_setfield(L, -2, "__index");
-	}
-
+	lua_createtable(L, 0, cqs_regcount(methods));
+	for (i = 0; i < nup; i++) /* copy upvalues */
+		lua_pushvalue(L, -nup - 2);
+	luaL_setfuncs(L, methods, nup);
+	lua_setfield(L, -2, "__index");
 
 	for (i = 0; i < nup; i++) /* remove the upvalues */
 		lua_remove(L, -2);
@@ -549,7 +549,7 @@ static inline cqs_error_t cqs_addzu(size_t *r, size_t a, size_t b) {
 #include <stropts.h>
 #endif
 
-static void cqs_debugfd(int fd) {
+NOTUSED static void cqs_debugfd(int fd) {
 	struct stat st;
 	char descr[64] = "";
 	int pending = -1;

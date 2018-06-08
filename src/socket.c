@@ -415,7 +415,7 @@ static void lso_pushsize(struct lua_State *L, size_t size) {
 	if (size == LSO_INFSIZ) {
 		lua_pushnumber(L, INFINITY);
 	} else {
-		lua_pushnumber(L, size);
+		lua_pushinteger(L, size);
 	}
 } /* lso_pushsize() */
 
@@ -423,7 +423,6 @@ static void lso_pushsize(struct lua_State *L, size_t size) {
 static int lso_tofileno(lua_State *L, int index) {
 	struct luasocket *so;
 	luaL_Stream *fh;
-	int fd;
 
 	if (lua_isnumber(L, index)) {
 		return lua_tointeger(L, index);
@@ -597,6 +596,9 @@ static struct so_options lso_checkopts(lua_State *L, int index) {
 
 	if (lso_altfield(L, index, "reuseport", "sin_reuseport"))
 		opts.sin_reuseport = lso_popbool(L);
+
+	if (lso_altfield(L, index, "broadcast", "sin_broadcast"))
+		opts.sin_broadcast = lso_popbool(L);
 
 	if (lso_altfield(L, index, "nodelay", "sin_nodelay"))
 		opts.sin_nodelay = lso_popbool(L);
@@ -1082,7 +1084,6 @@ error:
 static lso_nargs_t lso_checktls(lua_State *L) {
 	struct luasocket *S = lso_checkself(L, 1);
 	SSL **ssl;
-	int error;
 
 	ssl = lua_newuserdata(L, sizeof *ssl);
 
@@ -1140,7 +1141,6 @@ error:
 
 static lso_nargs_t lso_dup(lua_State *L) {
 	struct so_options opts;
-	struct luasocket *S;
 	int ofd, fd = -1, error;
 
 	if (lua_istable(L, 1)) {
@@ -1193,7 +1193,6 @@ error:
  */
 static lso_nargs_t lso_fdopen(lua_State *L) {
 	struct so_options opts;
-	struct luasocket *S;
 	int fd, error;
 
 	if (lua_istable(L, 1)) {
@@ -1313,7 +1312,7 @@ static int lso_checkvbuf(struct lua_State *L, int index) {
 
 static lso_nargs_t lso_setvbuf_(struct lua_State *L, struct luasocket *S, int modeidx, int bufidx) {
 	lso_pushmode(L, S->obuf.mode, LSO_WRMASK, 1);
-	lua_pushnumber(L, S->obuf.bufsiz);
+	lua_pushinteger(L, S->obuf.bufsiz);
 
 	S->obuf.mode = lso_checkvbuf(L, modeidx) | (S->obuf.mode & ~LSO_ALLBUF);
 
@@ -1473,14 +1472,14 @@ static lso_nargs_t lso_setmaxerrs_(struct lua_State *L, struct luasocket *S, int
 	for (; *what; what++) {
 		switch (*what) {
 		case 'r':
-			lua_pushnumber(L, S->ibuf.maxerrs);
+			lua_pushinteger(L, S->ibuf.maxerrs);
 			nret++;
 
 			S->ibuf.maxerrs = luaL_optunsigned(L, index, S->ibuf.maxerrs);
 
 			break;
 		case 'w':
-			lua_pushnumber(L, S->obuf.maxerrs);
+			lua_pushinteger(L, S->obuf.maxerrs);
 			nret++;
 
 			S->obuf.maxerrs = luaL_optunsigned(L, index, S->obuf.maxerrs);
@@ -1681,9 +1680,7 @@ static lso_error_t lso_getline(struct luasocket *S, struct iovec *iov) {
 
 
 static lso_error_t lso_getheader(struct luasocket *S, struct iovec *iov) {
-	char *p, *pe;
 	size_t eoh;
-	_Bool eof;
 	int error;
 
 	fifo_slice(&S->ibuf.fifo, iov, 0, S->ibuf.maxline);
@@ -1718,7 +1715,6 @@ error:
 
 static lso_error_t lso_getbody(struct luasocket *S, struct iovec *iov, int *eom, const char *eob, size_t eoblen, int mode) {
 	size_t bufsiz, maxbuf, n;
-	const char *p, *pe;
 	int error;
 
 	bufsiz = (mode & LSO_TEXT)? MAX(S->ibuf.bufsiz, S->ibuf.maxline) : S->ibuf.bufsiz;
@@ -1743,8 +1739,6 @@ static lso_error_t lso_getbody(struct luasocket *S, struct iovec *iov, int *eom,
 		iov->iov_len = n - eoblen; /* n >= eoblen */
 
 		*eom = 1;
-
-		return 0;
 	} else if (iov->iov_len >= maxbuf) {
 		/*
 		 * Because maxbuf is >= bufsiz + 2 + eoblen we can be sure
@@ -1769,12 +1763,9 @@ static lso_error_t lso_getbody(struct luasocket *S, struct iovec *iov, int *eom,
 			 * trimmed a \r here.
 			 */
 		}
-
-		return 0;
 	}
 
-error:
-	return lso_asserterror(error);
+	return 0;
 } /* lso_getbody() */
 
 
@@ -2214,7 +2205,7 @@ static lso_nargs_t lso_send5(lua_State *L) {
 	int mode, byline, error;
 
 	if ((error = lso_prepsnd(L, S))) {
-		lua_pushnumber(L, 0);
+		lua_pushinteger(L, 0);
 		lua_pushinteger(L, error);
 
 		return 2;
@@ -2278,11 +2269,11 @@ static lso_nargs_t lso_send5(lua_State *L) {
 	if ((error = lso_doflush(S, mode)))
 		goto error;
 
-	lua_pushnumber(L, p - tp);
+	lua_pushinteger(L, p - tp);
 
 	return 1;
 error:
-	lua_pushnumber(L, p - tp);
+	lua_pushinteger(L, p - tp);
 	lua_pushinteger(L, error);
 
 	return 2;
@@ -2338,8 +2329,6 @@ static lso_nargs_t lso_sendfd3(lua_State *L) {
 	struct luasocket *S = lso_checkself(L, 1);
 	const void *src;
 	size_t len;
-	struct luasocket *so;
-	luaL_Stream *fh;
 	int fd, error;
 
 	if ((error = lso_prepsnd(L, S)))
@@ -2490,10 +2479,12 @@ static lso_nargs_t lso_unpack2(lua_State *L) {
 
 	value = fifo_unpack(&S->ibuf.fifo, count);
 
-	if (value != (unsigned long long)(lua_Number)value)
+	if (value == (unsigned long long)(lua_Integer)value)
+		lua_pushinteger(L, (lua_Integer)value);
+	else if (value == (unsigned long long)(lua_Number)value)
+		lua_pushnumber(L, (lua_Number)value);
+	else
 		goto range;
-
-	lua_pushnumber(L, (lua_Number)value);
 
 	return 1;
 range:
@@ -2651,7 +2642,6 @@ static lso_nargs_t lso_eof(lua_State *L) {
 
 static lso_nargs_t lso_accept(lua_State *L) {
 	struct luasocket *A = luaL_checkudata(L, 1, LSO_CLASS);
-	struct luasocket *S;
 	struct so_options opts;
 	int fd, error;
 
@@ -2801,20 +2791,20 @@ static lso_nargs_t lso_stat(lua_State *L) {
 	lua_newtable(L);
 
 	lua_newtable(L);
-	lua_pushnumber(L, st->sent.count);
+	lua_pushinteger(L, st->sent.count);
 	lua_setfield(L, -2, "count");
 	lua_pushboolean(L, st->sent.eof);
 	lua_setfield(L, -2, "eof");
-	lua_pushnumber(L, st->sent.time);
+	lua_pushinteger(L, st->sent.time);
 	lua_setfield(L, -2, "time");
 	lua_setfield(L, -2, "sent");
 
 	lua_newtable(L);
-	lua_pushnumber(L, st->rcvd.count);
+	lua_pushinteger(L, st->rcvd.count);
 	lua_setfield(L, -2, "count");
 	lua_pushboolean(L, st->rcvd.eof);
 	lua_setfield(L, -2, "eof");
-	lua_pushnumber(L, st->rcvd.time);
+	lua_pushinteger(L, st->rcvd.time);
 	lua_setfield(L, -2, "time");
 	lua_setfield(L, -2, "rcvd");
 
@@ -3019,7 +3009,7 @@ static int dbg_iov_eoh(lua_State *L) {
 
 		return 3;
 	} else {
-		lua_pushnumber(L, eoh);
+		lua_pushinteger(L, eoh);
 
 		return 1;
 	}
@@ -3030,7 +3020,7 @@ static int dbg_iov_eob(lua_State *L) {
 	struct iovec haystack = dbg_checkstring(L, 1);
 	struct iovec needle = dbg_checkstring(L, 2);
 
-	lua_pushnumber(L, iov_eob(&haystack, needle.iov_base, needle.iov_len));
+	lua_pushinteger(L, iov_eob(&haystack, needle.iov_base, needle.iov_len));
 
 	return 1;
 } /* dbg_iov_eob() */
@@ -3051,7 +3041,7 @@ static int dbg_iov_eot(lua_State *L) {
 
 		return 3;
 	} else {
-		lua_pushnumber(L, n);
+		lua_pushinteger(L, n);
 
 		return 1;
 	}

@@ -826,6 +826,11 @@ int so_reuseport(int fd, _Bool reuseport) {
 } /* so_reuseport() */
 
 
+int so_broadcast(int fd, _Bool broadcast) {
+	return so_setboolopt(fd, SOL_SOCKET, SO_BROADCAST, broadcast);
+} /* so_broadcast() */
+
+
 int so_nodelay(int fd, _Bool nodelay) {
 	return so_setboolopt(fd, IPPROTO_TCP, TCP_NODELAY, nodelay);
 } /* so_nodelay() */
@@ -898,6 +903,7 @@ static const struct flops {
 	{ SO_F_NONBLOCK,  &so_nonblock,  optoffset(fd_nonblock),   },
 	{ SO_F_REUSEADDR, &so_reuseaddr, optoffset(sin_reuseaddr), },
 	{ SO_F_REUSEPORT, &so_reuseport, optoffset(sin_reuseport), },
+	{ SO_F_BROADCAST, &so_broadcast, optoffset(sin_broadcast), },
 	{ SO_F_NODELAY,   &so_nodelay,   optoffset(sin_nodelay),   },
 	{ SO_F_NOPUSH,    &so_nopush,    optoffset(sin_nopush),    },
 	{ SO_F_NOSIGPIPE, &so_nosigpipe, optoffset(fd_nosigpipe),  },
@@ -940,7 +946,7 @@ static int so_type2mask(mode_t mode, int family, int type, int protocol) {
 	int mask = SO_F_CLOEXEC|SO_F_NONBLOCK|SO_F_NOSIGPIPE;
 
 	if (S_ISSOCK(mode)) {
-		mask |= SO_F_REUSEADDR|SO_F_REUSEPORT|SO_F_NODELAY|SO_F_NOPUSH|SO_F_OOBINLINE;
+		mask |= SO_F_REUSEADDR|SO_F_REUSEPORT|SO_F_OOBINLINE;
 
 		if (!protocol) {
 			if (family == AF_INET || family == AF_INET6) {
@@ -948,12 +954,16 @@ static int so_type2mask(mode_t mode, int family, int type, int protocol) {
 			}
 		}
 
-		if (family != AF_INET6) {
-			mask &= ~SO_F_V6ONLY;
+		if (family == AF_INET6) {
+			mask |= SO_F_V6ONLY;
 		}
 
-		if (protocol != IPPROTO_TCP) {
-			mask &= ~(SO_F_NODELAY|SO_F_NOPUSH);
+		if (type == SOCK_DGRAM) {
+			mask |= SO_F_BROADCAST;
+		}
+
+		if (protocol == IPPROTO_TCP) {
+			mask |= SO_F_NODELAY|SO_F_NOPUSH;
 		}
 	}
 
@@ -981,6 +991,9 @@ int so_getfl(int fd, int which) {
 	if ((which & SO_F_REUSEPORT) && so_getboolopt(fd, SOL_SOCKET, SO_REUSEPORT))
 		flags |= SO_F_REUSEPORT;
 #endif
+
+	if ((which & SO_F_BROADCAST) && so_getboolopt(fd, SOL_SOCKET, SO_BROADCAST))
+		flags |= SO_F_BROADCAST;
 
 	if ((which & SO_F_NODELAY) && so_getboolopt(fd, IPPROTO_TCP, TCP_NODELAY))
 		flags |= SO_F_NODELAY;
@@ -1299,7 +1312,6 @@ error:
 
 
 static int so_socket_(struct socket *so) {
-	struct stat st;
 	int error;
 
 	if (!so->host)
@@ -1894,8 +1906,6 @@ struct socket *so_fdopen(int fd, const struct so_options *opts, int *error_) {
 	so->fd = fd;
 
 	return so;
-syerr:
-	error = errno;
 error:
 	so_close(so);
 
@@ -2081,15 +2091,15 @@ int so_starttls(struct socket *so, const struct so_starttls *cfg) {
 	SSL_set_mode(so->ssl.ctx, SSL_MODE_ENABLE_PARTIAL_WRITE);
 
 	/*
-	 * NOTE: SSLv3_server_method()->ssl_connect should be a reference to
+	 * NOTE: SSLv23_server_method()->ssl_connect should be a reference to
 	 * OpenSSL's internal ssl_undefined_function().
 	 *
-	 * Server methods such as SSLv23_server_method(), etc. should have
+	 * Server methods such as TLSv1_2_server_method(), etc. should have
 	 * their .ssl_connect method set to this value.
 	 */
 	method = SSL_get_ssl_method(so->ssl.ctx);
 
-	if (!method->ssl_connect || method->ssl_connect == SSLv3_server_method()->ssl_connect)
+	if (!method->ssl_connect || method->ssl_connect == SSLv23_server_method()->ssl_connect)
 		so->ssl.accept = 1;
 
 	if (!so->ssl.accept && so->opts.tls_sendname && so->opts.tls_sendname != SO_OPTS_TLS_HOSTNAME) {
