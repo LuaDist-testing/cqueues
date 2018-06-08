@@ -34,7 +34,7 @@
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 #define AG_VENDOR  "william+autoguess@25thandClement.com"
-#define AG_VERSION 20160728L
+#define AG_VERSION 20161019L
 
 
 /*
@@ -322,7 +322,7 @@
 #define AG_FREEBSD_2VER(M, m, p) (((M) * 100000) + ((m) * 1000) + (p))
 #define AG_FREEBSD_PREREQ(M, m, p) (__FreeBSD__ > 0 && __FreeBSD_version >= AG_FREEBSD_2VER((M), (m), (p)))
 
-#define AG_IPHONE_2VER(M, m) (((M) * 10000) + ((M) * 100))
+#define AG_IPHONE_2VER(M, m) (((M) * 10000) + ((m) * 100))
 #if defined __IPHONE_OS_VERSION_MIN_REQUIRED
 #define AG_IPHONE_PREREQ(M, m) (AG_IPHONE_2VER((M), (m)) <= __IPHONE_OS_VERSION_MIN_REQUIRED)
 #else
@@ -336,7 +336,7 @@
 #endif
 
 #define AG_MACOS_2VER_10_9(M, m, p) (((M) * 100) + ((m) * 10))
-#define AG_MACOS_2VER_10_10(M, m, p) (((M) * 10000) + ((M) * 100) + (p))
+#define AG_MACOS_2VER_10_10(M, m, p) (((M) * 10000) + ((m) * 100) + (p))
 #define AG_MACOS_PREREQ_10_10(M, m, p) (((M) > 10 || ((M) == 10 && (m) >= 10)) && AG_MACOS_2VER_10_10((M), (m), (p)) <= __MAC_OS_X_VERSION_MIN_REQUIRED)
 #define AG_MACOS_PREREQ_10_9(M, m, p) (((M) == 10 && (m) < 10) && AG_MACOS_2VER_10_9((M), (m), (p)) <= __MAC_OS_X_VERSION_MIN_REQUIRED)
 #if defined __MAC_OS_X_VERSION_MIN_REQUIRED
@@ -344,6 +344,11 @@
 #else
 #define AG_MACOS_PREREQ(M, m, p) 0
 #endif
+
+#define AG_OPENBSD_PREREQ_0_0 (__OpenBSD__)
+#define AG_OPENBSD_PREREQ_5_5 (OpenBSD >= 201405)
+#define AG_OPENBSD_PREREQ_5_7 (OpenBSD >= 201505)
+#define AG_OPENBSD_PREREQ(M, m) (AG_OPENBSD_PREREQ_ ## M ## _ ## m)
 
 #define AG_SUNOS_PREREQ_5_10 (__sun && _DTRACE_VERSION)
 #define AG_SUNOS_PREREQ_5_11 (__sun && F_DUPFD_CLOEXEC)
@@ -475,7 +480,7 @@
 #endif
 
 #ifndef HAVE_SYS_EVENTFD_H
-#define HAVE_SYS_EVENTFD_H_ (AG_GLIBC_PREREQ(2,8) || (!AG_GLIBC_PREREQ(0,0) && __linux__) || EFD_CLOEXEC)
+#define HAVE_SYS_EVENTFD_H_ (AG_GLIBC_PREREQ(2,8) || (!AG_GLIBC_PREREQ(0,0) && __linux__) || defined EFD_CLOEXEC)
 #define HAVE_SYS_EVENTFD_H ag_test_include(<sys/eventfd.h>, HAVE_SYS_EVENTFD_H_)
 #endif
 
@@ -484,7 +489,7 @@
 #endif
 
 #ifndef HAVE_SYS_SIGNALFD_H
-#define HAVE_SYS_SIGNALFD_H_ (AG_GLIBC_PREREQ(2,8) || (!AG_GLIBC_PREREQ(0,0) && __linux__) || SFD_CLOEXEC)
+#define HAVE_SYS_SIGNALFD_H_ (AG_GLIBC_PREREQ(2,8) || (!AG_GLIBC_PREREQ(0,0) && __linux__) || defined SFD_CLOEXEC)
 #define HAVE_SYS_SIGNALFD_H ag_test_include(<sys/signalfd.h>, HAVE_SYS_SIGNALFD_H_)
 #endif
 
@@ -501,7 +506,7 @@
 #endif
 
 #ifndef HAVE_SYS_TIMERFD_H
-#define HAVE_SYS_TIMERFD_H_  (AG_GLIBC_PREREQ(2,8) || (!AG_GLIBC_PREREQ(0,0) && __linux__) || TFD_CLOEXEC)
+#define HAVE_SYS_TIMERFD_H_  (AG_GLIBC_PREREQ(2,8) || (!AG_GLIBC_PREREQ(0,0) && __linux__) || defined TFD_CLOEXEC)
 #define HAVE_SYS_TIMERFD_H ag_test_include(<sys/timerfd.h>, HAVE_SYS_TIMERFD_H_)
 #endif
 
@@ -519,12 +524,16 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#ifndef HAVE_CLOCKID_T
+#define HAVE_CLOCKID_T (defined CLOCK_MONOTONIC)
+#endif
+
 #ifndef HAVE_STRUCT_SOCKADDR_SA_LEN
 #define HAVE_STRUCT_SOCKADDR_SA_LEN (!__linux__ && !__sun)
 #endif
 
 #ifndef HAVE_STRUCT_STAT_ST_ATIM
-#define HAVE_STRUCT_STAT_ST_ATIM (defined st_atime && ((!__APPLE__ && !__NetBSD__) || !HAVE_STRUCT_STAT_ST_ATIMESPEC))
+#define HAVE_STRUCT_STAT_ST_ATIM (defined st_atime && ((!__APPLE__ && (!__NetBSD__ || AG_NETBSD_PREREQ(7,0,0))) || !HAVE_STRUCT_STAT_ST_ATIMESPEC))
 #endif
 
 #ifndef HAVE_STRUCT_STAT_ST_CTIM
@@ -567,6 +576,18 @@
 
 #ifndef HAVE___DECL_LIBC_ENABLE_SECURE
 #define HAVE___DECL_LIBC_ENABLE_SECURE 0
+#endif
+
+#ifndef HAVE_DECL_CLOCK_GETTIME
+#define HAVE_DECL_CLOCK_GETTIME HAVE_DECL_CLOCK_MONOTONIC
+#endif
+
+#ifndef HAVE_DECL_CLOCK_MONOTONIC
+#define HAVE_DECL_CLOCK_MONOTONIC (defined CLOCK_MONOTONIC)
+#endif
+
+#ifndef HAVE_DECL_CLOCK_REALTIME
+#define HAVE_DECL_CLOCK_REALTIME (defined CLOCK_REALTIME)
 #endif
 
 #ifndef HAVE_DECL_PROGRAM_INVOCATION_SHORT_NAME
@@ -620,7 +641,7 @@
 #endif
 
 #ifndef HAVE_ARC4RANDOM_ADDRANDOM
-#define HAVE_ARC4RANDOM_ADDRANDOM (HAVE_ARC4RANDOM && OpenBSD < 201405)
+#define HAVE_ARC4RANDOM_ADDRANDOM (HAVE_ARC4RANDOM && !AG_OPENBSD_PREREQ(5,5))
 #endif
 
 #ifndef HAVE_ARC4RANDOM_STIR
@@ -628,7 +649,7 @@
 #endif
 
 #ifndef HAVE_CLOCK_GETTIME
-#define HAVE_CLOCK_GETTIME (!__APPLE__)
+#define HAVE_CLOCK_GETTIME (!__APPLE__ || AG_MACOS_PREREQ(10,12,0))
 #endif
 
 #ifndef HAVE_DLADDR
@@ -648,7 +669,7 @@
 #endif
 
 #ifndef HAVE_DUP3
-#define HAVE_DUP3 (AG_GLIBC_PREREQ(2,9) || AG_FREEBSD_PREREQ(10,0,0) || AG_NETBSD_PREREQ(6,0,0) || AG_UCLIBC_PREREQ(0,9,34) || AG_MUSL_MAYBE || __BIONIC__)
+#define HAVE_DUP3 (AG_GLIBC_PREREQ(2,9) || AG_FREEBSD_PREREQ(10,0,0) || AG_NETBSD_PREREQ(6,0,0) || AG_UCLIBC_PREREQ(0,9,34) || AG_MUSL_MAYBE || __BIONIC__ || AG_OPENBSD_PREREQ(5,7))
 #endif
 
 #ifndef HAVE_FDOPENDIR
@@ -667,7 +688,7 @@
 #endif
 
 #ifndef HAVE_EPOLL_CREATE1
-#define HAVE_EPOLL_CREATE1 (HAVE_EPOLL_CREATE && (EPOLL_CLOEXEC || AG_GLIBC_PREREQ(2,9)))
+#define HAVE_EPOLL_CREATE1 (HAVE_EPOLL_CREATE && (defined EPOLL_CLOEXEC || AG_GLIBC_PREREQ(2,9)))
 #endif
 
 #ifndef HAVE_EPOLL_CTL
@@ -675,7 +696,7 @@
 #endif
 
 #ifndef HAVE_EPOLL_PWAIT
-#define HAVE_EPOLL_PWAIT 0
+#define HAVE_EPOLL_PWAIT (HAVE_EPOLL_WAIT && (AG_GLIBC_PREREQ(2,6) || (!AG_GLIBC_PREREQ(0,0) && defined EPOLL_CLOEXEC)))
 #endif
 
 #ifndef HAVE_EPOLL_WAIT
@@ -711,7 +732,7 @@
 #endif
 
 #ifndef HAVE_INOTIFY_INIT1
-#define HAVE_INOTIFY_INIT1 (HAVE_INOTIFY_INIT && IN_CLOEXEC)
+#define HAVE_INOTIFY_INIT1 (HAVE_INOTIFY_INIT && defined IN_CLOEXEC)
 #endif
 
 #ifndef HAVE_ISSETUGID
@@ -737,7 +758,7 @@
 #ifndef HAVE_OPENAT
 #define HAVE_OPENAT \
 	((!__APPLE__ || AG_MACOS_PREREQ(10,10,0) || AG_IPHONE_PREREQ(8,0)) \
-	 && (!__NetBSD__))
+	 && (!__NetBSD__ || AG_NETBSD_PREREQ(7,0,0)))
 #endif
 
 #ifndef HAVE_PACCEPT
@@ -745,7 +766,7 @@
 #endif
 
 #ifndef HAVE_PIPE2
-#define HAVE_PIPE2 (AG_GLIBC_PREREQ(2,9) || AG_FREEBSD_PREREQ(10,0,0) || AG_NETBSD_PREREQ(6,0,0) || AG_UCLIBC_PREREQ(0,9,32) || AG_MUSL_MAYBE || __BIONIC__)
+#define HAVE_PIPE2 (AG_GLIBC_PREREQ(2,9) || AG_FREEBSD_PREREQ(10,0,0) || AG_NETBSD_PREREQ(6,0,0) || AG_UCLIBC_PREREQ(0,9,32) || AG_MUSL_MAYBE || __BIONIC__ || AG_OPENBSD_PREREQ(5,7))
 #endif
 
 #ifndef HAVE_PORT_ALERT
@@ -785,7 +806,7 @@
 #endif
 
 #ifndef HAVE_POSIX_FALLOCATE
-#define HAVE_POSIX_FALLOCATE (AG_GLIBC_PREREQ(2,2) || __sun || AG_MUSL_MAYBE || AG_FREEBSD_PREREQ(9,0,0) || _AIX)
+#define HAVE_POSIX_FALLOCATE (_AIX || AG_FREEBSD_PREREQ(9,0,0) || AG_GLIBC_PREREQ(2,2) || AG_MUSL_MAYBE || AG_NETBSD_PREREQ(7,0,0) || __sun)
 #endif
 
 #ifndef HAVE_SIGNALFD
@@ -801,7 +822,7 @@
 #endif
 
 #ifndef HAVE_STATIC_ASSERT
-#if AG_GNUC_PREREQ(0,0,0) && !AG_GNUC_PREREQ(4,6,0)
+#if AG_GLIBC_PREREQ(0,0) && !HAVE__STATIC_ASSERT
 #define HAVE_STATIC_ASSERT 0 /* glibc doesn't check GCC version */
 #else
 #define HAVE_STATIC_ASSERT (defined static_assert)

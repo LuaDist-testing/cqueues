@@ -63,7 +63,7 @@
 #endif
 
 #ifndef CQUEUES_VERSION
-#define CQUEUES_VERSION 20160812L
+#define CQUEUES_VERSION 20161018L
 #endif
 
 
@@ -125,40 +125,42 @@ inline static int setcloexec(int fd) {
 /*
  * clock_gettime()
  *
- * OS X doesn't implement the clock_gettime() POSIX interface, but does
- * provide a monotonic clock through mach_absolute_time(). On i386 and
- * x86_64 architectures this clock is in nanosecond units, but not so on
- * other devices. mach_timebase_info() provides the conversion parameters.
+ * OS X didn't implement the clock_gettime() POSIX interface until macOS
+ * 10.12 (Sierra). But it did provide a monotonic clock through
+ * mach_absolute_time(). On i386 and x86_64 architectures this clock is in
+ * nanosecond units, but not so on other devices. mach_timebase_info()
+ * provides the conversion parameters.
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 #if __APPLE__
 
-#include <time.h>            /* struct timespec */
-
 #include <errno.h>           /* errno EINVAL */
+#include <time.h>            /* struct timespec */
 
 #include <sys/time.h>        /* TIMEVAL_TO_TIMESPEC struct timeval gettimeofday(3) */
 
 #include <mach/mach_time.h>  /* mach_timebase_info_data_t mach_timebase_info() mach_absolute_time() */
 
+#if !HAVE_DECL_CLOCK_REALTIME
+enum { CLOCK_REALTIME = 0 };
+#endif
+#if !HAVE_DECL_CLOCK_MONOTONIC
+enum { CLOCK_MONOTONIC = 6 };
+#endif
 
-#define CLOCK_REALTIME  0
-#define CLOCK_VIRTUAL   1
-#define CLOCK_PROF      2
-#define CLOCK_MONOTONIC 3
+#if !HAVE_CLOCKID_T
+typedef int clockid_t;
+#endif
+
+#if HAVE_CLOCK_GETTIME && !HAVE_DECL_CLOCK_GETTIME
+extern int (clock_gettime)(clockid_t, struct timespec *);
+#endif
 
 static mach_timebase_info_data_t clock_timebase = {
 	.numer = 1, .denom = 1,
 }; /* clock_timebase */
 
-void clock_gettime_init(void) __attribute__((constructor));
-
-void clock_gettime_init(void) {
-	if (mach_timebase_info(&clock_timebase) != KERN_SUCCESS)
-		__builtin_abort();
-} /* clock_gettime_init() */
-
-static int clock_gettime(int clockid, struct timespec *ts) {
+static int compat_clock_gettime(clockid_t clockid, struct timespec *ts) {
 	switch (clockid) {
 	case CLOCK_REALTIME: {
 		struct timeval tv;
@@ -187,6 +189,31 @@ static int clock_gettime(int clockid, struct timespec *ts) {
 		return -1;
 	} /* switch() */
 } /* clock_gettime() */
+
+#define clock_gettime(clockid, ts) clock_gettime_p((clockid), (ts))
+
+static int (*clock_gettime_p)(clockid_t, struct timespec *) = &compat_clock_gettime;
+
+void clock_gettime_init(void) __attribute__((constructor));
+
+void clock_gettime_init(void) {
+#if HAVE_CLOCK_GETTIME
+	/*
+	 * NB: clock_gettime is implemented as a weak symbol which autoconf
+	 * tests will always positively identify when compiling with XCode
+	 * 8.0 or above, regardless of -mmacosx-version-min. Similarly, it
+	 * will always be declared by XCode 8.0 or above.
+	 */
+	if (&(clock_gettime)) {
+		clock_gettime_p = &(clock_gettime);
+		return;
+	}
+#endif
+	if (mach_timebase_info(&clock_timebase) != KERN_SUCCESS)
+		__builtin_abort();
+
+	clock_gettime_p = &compat_clock_gettime;
+} /* clock_gettime_init() */
 
 #endif /* __APPLE__ */
 
@@ -393,8 +420,10 @@ static void *pool_get(struct pool *P, int *_error) {
 #include <sys/epoll.h>	/* struct epoll_event epoll_create(2) epoll_ctl(2) epoll_wait(2) */
 #elif ENABLE_PORTS
 #include <port.h>
-#else
+#elif ENABLE_KQUEUE
 #include <sys/event.h>	/* EVFILT_READ EVFILT_WRITE EV_SET EV_ADD EV_DELETE struct kevent kqueue(2) kevent(2) */
+#else
+#error "No polling backend available"
 #endif
 
 #if HAVE_SYS_EVENTFD_H
@@ -410,7 +439,7 @@ static void *pool_get(struct pool *P, int *_error) {
 typedef struct epoll_event kpoll_event_t;
 #elif ENABLE_PORTS
 typedef port_event_t kpoll_event_t;
-#else
+#elif ENABLE_KQUEUE
 /* NetBSD uses intptr_t, others use void *, for .udata */
 #define KP_P2UDATA(p) ((__typeof__(((struct kevent *)0)->udata))(p))
 #define KP_UDATA2P(udata) ((void *)(udata))
@@ -512,7 +541,7 @@ static int kpoll_init(struct kpoll *kp) {
 
 	if ((error = setcloexec(kp->fd)))
 		return error;
-#else
+#elif ENABLE_KQUEUE
 	if (-1 == (kp->fd = kqueue()))
 		return errno;
 
@@ -536,7 +565,7 @@ static inline void *kpoll_udata(const kpoll_event_t *event) {
 	return event->data.ptr;
 #elif ENABLE_PORTS
 	return event->portev_user;
-#else
+#elif ENABLE_KQUEUE
 	return KP_UDATA2P(event->udata);
 #endif
 } /* kpoll_udata() */
@@ -547,7 +576,7 @@ static inline short kpoll_pending(const kpoll_event_t *event) {
 	return event->events;
 #elif ENABLE_PORTS
 	return event->portev_events;
-#else
+#elif ENABLE_KQUEUE
 	return (event->filter == EVFILT_READ)? POLLIN : (event->filter == EVFILT_WRITE)? POLLOUT : 0;
 #endif
 } /* kpoll_pending() */
@@ -599,7 +628,7 @@ static int kpoll_ctl(struct kpoll *kp, int fd, short *state, short events, void 
 	*state = events;
 
 	return 0;
-#else
+#elif ENABLE_KQUEUE
 	struct kevent event;
 
 	if (*state == events)
@@ -759,7 +788,7 @@ static int kpoll_wait(struct kpoll *kp, double timeout) {
 	kp->pending.count = n;
 
 	return 0;
-#else
+#elif ENABLE_KQUEUE
 	int n;
 
 	if (-1 == (n = kevent(kp->fd, NULL, 0, kp->pending.event, (int)countof(kp->pending.event), f2ts(timeout))))
@@ -1983,8 +2012,8 @@ static cqs_status_t cqueue_resume(lua_State *L, struct cqueue *Q, struct callinf
 	} else {
 		nargs = lua_gettop(T->L);
 		if (status != LUA_YIELD) {
-			nargs -= 1;
-			assert(nargs >= 0);
+			if (nargs > 0)
+				nargs -= 1; /* exclude function */
 		}
 	}
 
@@ -2294,9 +2323,8 @@ static int cqueue_wrap(lua_State *L) {
 	luaL_checktype(L, 2, LUA_TFUNCTION);
 
 	newL = lua_newthread(L);
-	for (i = 2; i <= top; i++) {
-		lua_pushvalue(L, i);
-	}
+	lua_insert(L, 2);
+	luaL_checkstack(newL, top - 1, "too many arguments");
 	lua_xmove(L, newL, top - 1);
 
 	thread_add(L, Q, &I, -1);
