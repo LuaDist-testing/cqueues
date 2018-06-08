@@ -24,11 +24,8 @@
  * ==========================================================================
  */
 #include <string.h>
-
 #include <math.h>
-
 #include <signal.h>
-
 #include <errno.h>
 
 #include <unistd.h>
@@ -101,7 +98,7 @@ static int sfd_init(struct signalfd *S) {
 
 
 static void sfd_destroy(struct signalfd *S) {
-	close(S->fd);
+	cqs_closefd(&S->fd);
 
 	sfd_preinit(S);
 } /* sfd_destroy() */
@@ -225,7 +222,7 @@ static int lsl_listen(lua_State *L) {
 	lua_setmetatable(L, -2);
 
 	if ((error = sfd_init(S)) || (error = sfd_update(S)))
-		return luaL_error(L, "signal.listen: %s", strerror(error));
+		return luaL_error(L, "signal.listen: %s", cqs_strerror(error));
 
 	return 1;
 } /* lsl_listen() */
@@ -246,7 +243,7 @@ static int lsl_wait(lua_State *L) {
 	int error, signo;
 
 	if ((error = sfd_query(S)))
-		return luaL_error(L, "signal:get: %s", strerror(error));
+		return luaL_error(L, "signal:get: %s", cqs_strerror(error));
 
 	sigemptyset(&none);
 
@@ -322,17 +319,7 @@ static int lsl_type(lua_State *L) {
 
 
 static int lsl_interpose(lua_State *L) {
-	luaL_getmetatable(L, LSL_CLASS);
-	lua_getfield(L, -1, "__index");
-
-	lua_pushvalue(L, -4); /* push method name */
-	lua_gettable(L, -2);  /* push old method */
-
-	lua_pushvalue(L, -5); /* push method name */
-	lua_pushvalue(L, -5); /* push new method */
-	lua_settable(L, -4);  /* replace old method */
-
-	return 1; /* return old method */
+	return cqs_interpose(L, LSL_CLASS);
 } /* lsl_interpose() */
 
 
@@ -367,7 +354,7 @@ static int ls_ignore(lua_State *L) {
 		sa.sa_flags = 0;
 
 		if (0 != sigaction(luaL_checkint(L, index), &sa, 0))
-			return luaL_error(L, "signal.ignore: %s", strerror(errno));
+			return luaL_error(L, "signal.ignore: %s", cqs_strerror(errno));
 	}
 
 	lua_pushboolean(L, 1);
@@ -386,7 +373,7 @@ static int ls_default(lua_State *L) {
 		sa.sa_flags = 0;
 
 		if (0 != sigaction(luaL_checkint(L, index), &sa, 0))
-			return luaL_error(L, "signal.default: %s", strerror(errno));
+			return luaL_error(L, "signal.default: %s", cqs_strerror(errno));
 	}
 
 	lua_pushboolean(L, 1);
@@ -409,7 +396,7 @@ static int ls_discard(lua_State *L) {
 		sa.sa_flags = 0;
 
 		if (0 != sigaction(luaL_checkint(L, index), &sa, 0))
-			return luaL_error(L, "signal.discard: %s", strerror(errno));
+			return luaL_error(L, "signal.discard: %s", cqs_strerror(errno));
 	}
 
 	lua_pushboolean(L, 1);
@@ -429,7 +416,7 @@ static int ls_block(lua_State *L) {
 	}
 
 	if ((error = cqs_sigmask(SIG_BLOCK, &set, 0)))
-		return luaL_error(L, "signal.block: %s", strerror(error));
+		return luaL_error(L, "signal.block: %s", cqs_strerror(error));
 
 	lua_pushboolean(L, 1);
 
@@ -448,7 +435,7 @@ static int ls_unblock(lua_State *L) {
 	}
 
 	if ((error = cqs_sigmask(SIG_UNBLOCK, &set, 0)))
-		return luaL_error(L, "signal.unblock: %s", strerror(error));
+		return luaL_error(L, "signal.unblock: %s", cqs_strerror(error));
 
 	lua_pushboolean(L, 1);
 

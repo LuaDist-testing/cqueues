@@ -33,7 +33,7 @@
 #include <time.h>   /* time(2) */
 
 #include <sys/types.h>   /* socklen_t mode_t in_port_t */
-#include <sys/stat.h>    /* fchmod(2) fstat(2) */
+#include <sys/stat.h>    /* fchmod(2) fstat(2) S_IFSOCK S_ISSOCK */
 #include <sys/select.h>  /* FD_ZERO FD_SET fd_set select(2) */
 #include <sys/socket.h>  /* AF_UNIX AF_INET AF_INET6 SO_TYPE SO_NOSIGPIPE MSG_NOSIGNAL struct sockaddr_storage socket(2) connect(2) bind(2) listen(2) accept(2) getsockname(2) getpeername(2) */
 #if defined(AF_UNIX)
@@ -52,6 +52,7 @@
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <openssl/bio.h>
 
 #include "dns.h"
 #include "socket.h"
@@ -185,7 +186,8 @@ static void so_dump(const unsigned char *src, size_t len, FILE *fp) {
 
 
 static void so_trace(enum so_trace event, int fd, const struct addrinfo *host, ...) {
-	struct sockaddr_storage saddr;
+	struct sockaddr_storage saddr = {0};
+	socklen_t saddr_len = sizeof saddr;
 	char addr[64], who[256];
 	in_port_t port;
 	va_list ap;
@@ -206,8 +208,8 @@ static void so_trace(enum so_trace event, int fd, const struct addrinfo *host, .
 			snprintf(who, sizeof who, "%.96s/[%s]:%hu", host->ai_canonname, addr, ntohs(port));
 		else
 			snprintf(who, sizeof who, "[%s]:%hu", addr, ntohs(port));
-	} else if (fd != -1 && 0 == getpeername(fd, (struct sockaddr *)&saddr, &(socklen_t){ sizeof saddr })) {
-		sa_ntop(addr, sizeof addr, &saddr, NULL, &error);
+	} else if (fd != -1 && 0 == getpeername(fd, (struct sockaddr *)&saddr, &saddr_len)) {
+		sa_ntop(addr, saddr_len, &saddr, NULL, &error);
 		port = *sa_port(&saddr, SA_PORT_NONE, NULL);
 
 		snprintf(who, sizeof who, "[%s]:%hu", addr, ntohs(port));
@@ -581,6 +583,8 @@ void *sa_egress(void *lcl, size_t lim, sockaddr_arg_t rmt, int *_error) {
 	if (0 != connect(udp->fd, (struct sockaddr *)&ss, sa_len(&ss)))
 		goto syerr;
 
+	memset(&ss, 0, sizeof ss);
+
 	if (0 != getsockname(udp->fd, (struct sockaddr *)&ss, &(socklen_t){ sizeof ss }))
 		goto syerr;
 
@@ -603,8 +607,61 @@ error:
 } /* sa_egress() */
 
 
+static so_error_t so_ffamily(int fd, int *family) {
+	struct sockaddr_storage ss;
+
+	if (0 != getsockname(fd, (struct sockaddr *)&ss, &(socklen_t){ sizeof ss }))
+		return errno;
+
+	*family = ss.ss_family;
+
+	return 0;
+} /* so_ffamily() */
+
+
+static so_error_t so_ftype(int fd, mode_t *mode, int *domain, int *type, int *protocol) {
+	struct stat st;
+	int error;
+
+	if (0 != fstat(fd, &st))
+		return errno;
+
+	*mode = S_IFMT & st.st_mode;
+
+	if (!S_ISSOCK(*mode))
+		return 0;
+
+#if defined SO_DOMAIN
+	if (0 != getsockopt(fd, SOL_SOCKET, SO_DOMAIN, domain, &(socklen_t){ sizeof *domain })) {
+		if (errno != ENOPROTOOPT)
+			return errno;
+
+		if ((error = so_ffamily(fd, domain)))
+			return error;
+	}
+#else
+	if ((error = so_ffamily(fd, domain)))
+		return error;
+#endif
+
+	if (0 != getsockopt(fd, SOL_SOCKET, SO_TYPE, type, &(socklen_t){ sizeof *type }))
+		return errno;
+
+#if defined SO_PROTOCOL
+	if (0 != getsockopt(fd, SOL_SOCKET, SO_PROTOCOL, protocol, &(socklen_t){ sizeof *protocol })) {
+		if (errno != ENOPROTOOPT)
+			return errno;
+	}
+#else
+	(void)protocol;
+#endif
+
+	return 0;
+} /* so_ftype() */
+
+
 static int so_opts2flags(const struct so_options *, int *);
-static int so_type2mask(int, int, int);
+static int so_type2mask(mode_t, int, int, int);
 
 int so_socket(int domain, int type, const struct so_options *opts, int *_error) {
 	int error, fd, flags, mask, need;
@@ -618,8 +675,8 @@ int so_socket(int domain, int type, const struct so_options *opts, int *_error) 
 #endif
 
 	flags = so_opts2flags(opts, &mask);
-	mask &= so_type2mask(domain, type, 0);
-	need = ~(SO_F_NODELAY|SO_F_NOPUSH|SO_F_NOSIGPIPE);
+	mask &= so_type2mask(S_IFSOCK, domain, type, 0);
+	need = ~(SO_F_NODELAY|SO_F_NOPUSH|SO_F_NOSIGPIPE|SO_F_OOBINLINE);
 
 	if ((error = so_setfl(fd, flags, mask, need)))
 		goto error;
@@ -755,12 +812,17 @@ int so_reuseaddr(int fd, _Bool reuseaddr) {
 
 
 int so_reuseport(int fd, _Bool reuseport) {
+	int error;
 #if defined SO_REUSEPORT
-	return so_setboolopt(fd, SOL_SOCKET, SO_REUSEPORT, reuseport);
+	error = so_setboolopt(fd, SOL_SOCKET, SO_REUSEPORT, reuseport);
 #else
 	(void)fd;
-	return (reuseport)? EOPNOTSUPP : 0 /* already disabled */;
+	error = EOPNOTSUPP;
 #endif
+	if (error == EOPNOTSUPP && !reuseport)
+		error = 0; /* already disabled */
+
+	return error;
 } /* so_reuseport() */
 
 
@@ -819,6 +881,11 @@ int so_v6only(int fd, _Bool v6only) {
 } /* so_v6only() */
 
 
+int so_oobinline(int fd, _Bool oobinline) {
+	return so_setboolopt(fd, SOL_SOCKET, SO_OOBINLINE, oobinline);
+} /* so_oobinline() */
+
+
 #define NO_OFFSET ((size_t)-1)
 #define optoffset(m) offsetof(struct so_options, m)
 
@@ -835,6 +902,7 @@ static const struct flops {
 	{ SO_F_NOPUSH,    &so_nopush,    optoffset(sin_nopush),    },
 	{ SO_F_NOSIGPIPE, &so_nosigpipe, optoffset(fd_nosigpipe),  },
 	{ SO_F_V6ONLY,    &so_v6only,    NO_OFFSET,                },
+	{ SO_F_OOBINLINE, &so_oobinline, optoffset(sin_oobinline), },
 };
 
 
@@ -868,21 +936,25 @@ static int so_opts2flags(const struct so_options *opts, int *mask) {
 } /* so_opts2flags() */
 
 
-static int so_type2mask(int family, int type, int protocol) {
-	int mask = ~0;
+static int so_type2mask(mode_t mode, int family, int type, int protocol) {
+	int mask = SO_F_CLOEXEC|SO_F_NONBLOCK|SO_F_NOSIGPIPE;
 
-	if (!protocol) {
-		if (family == AF_INET || family == AF_INET6) {
-			protocol = (type == SOCK_STREAM)? IPPROTO_TCP : IPPROTO_UDP;
+	if (S_ISSOCK(mode)) {
+		mask |= SO_F_REUSEADDR|SO_F_REUSEPORT|SO_F_NODELAY|SO_F_NOPUSH|SO_F_OOBINLINE;
+
+		if (!protocol) {
+			if (family == AF_INET || family == AF_INET6) {
+				protocol = (type == SOCK_STREAM)? IPPROTO_TCP : IPPROTO_UDP;
+			}
 		}
-	}
 
-	if (family != AF_INET6) {
-		mask &= ~SO_F_V6ONLY;
-	}
+		if (family != AF_INET6) {
+			mask &= ~SO_F_V6ONLY;
+		}
 
-	if (protocol != IPPROTO_TCP) {
-		mask &= ~(SO_F_NODELAY|SO_F_NOPUSH);
+		if (protocol != IPPROTO_TCP) {
+			mask &= ~(SO_F_NODELAY|SO_F_NOPUSH);
+		}
 	}
 
 	return mask;
@@ -944,6 +1016,9 @@ int so_getfl(int fd, int which) {
 
 	if ((which & SO_F_V6ONLY) && so_getboolopt(fd, IPPROTO_IPV6, IPV6_V6ONLY))
 		flags |= SO_F_V6ONLY;
+
+	if ((which & SO_F_OOBINLINE) && so_getboolopt(fd, SOL_SOCKET, SO_OOBINLINE))
+		flags |= SO_F_OOBINLINE;
 
 	return flags;
 } /* so_getfl() */
@@ -1068,8 +1143,11 @@ struct socket {
 
 	int fd;
 
-	mode_t mode;
-	int flags;
+	mode_t mode;  /* file mode */
+	int domain;   /* socket domain (address family) */
+	int type;     /* socket type */
+	int protocol; /* socket protocol */
+	int flags;    /* descriptor flags */
 
 	struct so_stat st;
 
@@ -1094,8 +1172,18 @@ struct socket {
 		int state;
 		_Bool accept;
 		_Bool vrfd;
-		char *host;
 	} ssl;
+
+	struct {
+		BIO *ctx;
+//		BIO *ctrl; /* proxy unknown DTLS BIO_ctrl commands */
+		int error;
+
+		struct {
+			void *data;
+			unsigned char *p, *pe;
+		} ahead;
+	} bio;
 
 	struct {
 		int ncalls;
@@ -1114,7 +1202,7 @@ struct socket {
 static _Bool so_needign(struct socket *so, _Bool rdonly) {
 	if (!so->opts.fd_nosigpipe || (so->flags & SO_F_NOSIGPIPE))
 		return 0;
-	if (so->ssl.ctx)
+	if (so->ssl.ctx && !so->bio.ctx)
 		return 1;
 	if (rdonly)
 		return 0;
@@ -1222,12 +1310,10 @@ static int so_socket_(struct socket *so) {
 	if (-1 == (so->fd = so_socket(so->host->ai_family, so->host->ai_socktype, &so->opts, &error)))
 		return error;
 
+	if ((error = so_ftype(so->fd, &so->mode, &so->domain, &so->type, &so->protocol)))
+		return error;
+
 	so->flags = so_getfl(so->fd, ~0);
-
-	if (0 != fstat(so->fd, &st))
-		return errno;
-
-	so->mode = st.st_mode;
 
 	return 0;
 } /* so_socket_() */
@@ -1252,7 +1338,9 @@ static int so_bind_(struct socket *so) {
 
 
 static int so_listen_(struct socket *so) {
-	/* FIXME: Do we support non-SOCK_STREAM sockets? */
+	if (!S_ISSOCK(so->mode) || (so->type != SOCK_STREAM && so->type != SOCK_SEQPACKET))
+		return 0;
+
 	return (0 == listen(so->fd, SOMAXCONN))? 0 : so_soerr();
 } /* so_listen_() */
 
@@ -1302,6 +1390,8 @@ error:
 } /* so_connect_() */
 
 
+static BIO *so_newbio(struct socket *, int *);
+
 static int so_starttls_(struct socket *so) {
 	X509 *peer;
 	int rval, error;
@@ -1314,19 +1404,49 @@ static int so_starttls_(struct socket *so) {
 	ERR_clear_error();
 
 	switch (so->ssl.state) {
-	case 0:
-		if (1 != SSL_set_fd(so->ssl.ctx, so->fd)) {
-			error = SO_EOPENSSL;
+	case 0: {
+		/*
+		 * NOTE: For SOCK_DGRAM continue using OpenSSL's BIO until
+		 * we have time to reverse engineer the semantics necessary
+		 * for DTLS.
+		 */
+		if (S_ISSOCK(so->mode) && so->type == SOCK_DGRAM) {
+			struct sockaddr_storage peer;
+			BIO *bio;
 
-			goto error;
+			memset(&peer, 0, sizeof peer);
+
+			if (0 != getpeername(so->fd, (struct sockaddr *)&peer, &(socklen_t){ sizeof peer })) {
+				error = errno;
+				goto error;
+			}
+
+			if (!(bio = BIO_new_dgram(so->fd, BIO_NOCLOSE))) {
+				error = SO_EOPENSSL;
+				goto error;
+			}
+
+			BIO_ctrl_set_connected(bio, 1, &peer);
+
+			SSL_set_bio(so->ssl.ctx, bio, bio);
+			SSL_set_read_ahead(so->ssl.ctx, 1);
+		} else {
+			BIO *bio;
+
+			if (!(bio = so_newbio(so, &error)))
+				goto error;
+
+			SSL_set_bio(so->ssl.ctx, bio, bio);
 		}
 
-		if (so->ssl.accept)
+		if (so->ssl.accept) {
 			SSL_set_accept_state(so->ssl.ctx);
-		else
+		} else {
 			SSL_set_connect_state(so->ssl.ctx);
+		}
 
 		so->ssl.state++;
+	}
 	case 1:
 		rval = SSL_do_handshake(so->ssl.ctx);
 
@@ -1570,7 +1690,11 @@ error:
 
 
 static struct socket *so_make(const struct so_options *opts, int *error) {
-	static const struct socket so_initializer = { .fd = -1, .cred = { (pid_t)-1, (uid_t)-1, (gid_t)-1, } };
+	static const struct socket so_initializer = {
+		.fd = -1,
+		.domain = PF_UNSPEC,
+		.cred = { (pid_t)-1, (uid_t)-1, (gid_t)-1, }
+	};
 	struct socket *so;
 	size_t len;
 
@@ -1615,8 +1739,10 @@ error:
 } /* so_make() */
 
 
+static void so_resetssl(struct socket *);
+
 static int so_destroy(struct socket *so) {
-	ssl_discard(&so->ssl.ctx);
+	so_resetssl(so);
 
 	dns_ai_close(so->res);
 	so->res = NULL;
@@ -1750,40 +1876,21 @@ error:
 
 struct socket *so_fdopen(int fd, const struct so_options *opts, int *error_) {
 	struct socket *so;
-	struct stat st;
-	int family = AF_UNSPEC, type = 0, protocol = 0, flags, mask, need, error;
+	int flags, mask, need, error;
 
 	if (!(so = so_make(opts, &error)))
 		goto error;
 
-	if (0 != fstat(fd, &st))
-		goto syerr;
-
-	if (st.st_mode & S_IFSOCK) {
-		struct sockaddr_storage ss;
-
-		if (0 != getsockname(fd, (struct sockaddr *)&ss, &(socklen_t){ sizeof ss }))
-			goto syerr;
-
-		family = ss.ss_family;
-
-		if (0 != getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &(socklen_t){ sizeof type }))
-			goto syerr;
-
-		/*
-		 * FIXME: Use SO_PROTOCOL when available.
-		 * See http://austingroupbugs.net/view.php?id=840
-		 */
-	}
+	if ((error = so_ftype(fd, &so->mode, &so->domain, &so->type, &so->protocol)))
+		goto error;
 
 	flags = so_opts2flags(opts, &mask);
-	mask &= so_type2mask(family, type, protocol);
-	need = ~(SO_F_NODELAY|SO_F_NOPUSH|SO_F_NOSIGPIPE);
+	mask &= so_type2mask(so->mode, so->domain, so->type, so->protocol);
+	need = ~(SO_F_NODELAY|SO_F_NOPUSH|SO_F_NOSIGPIPE|SO_F_OOBINLINE);
 
 	if ((error = so_rstfl(fd, &so->flags, flags, mask, need)))
 		goto error;
 
-	so->mode = st.st_mode;
 	so->fd = fd;
 
 	return so;
@@ -1906,9 +2013,28 @@ error:
 } /* so_accept() */
 
 
-int so_starttls(struct socket *so, SSL_CTX *ctx) {
-	SSL_CTX *tmp = 0;
+static void so_resetssl(struct socket *so) {
+	ssl_discard(&so->ssl.ctx);
+	so->ssl.state  = 0;
+	so->ssl.error  = 0;
+	so->ssl.accept = 0;
+	so->ssl.vrfd   = 0;
+
+	if (so->bio.ctx) {
+		BIO_free(so->bio.ctx);
+		so->bio.ctx = NULL;
+	}
+
+	free(so->bio.ahead.data);
+	so->bio.ahead.data = NULL;
+	so->bio.ahead.p = NULL;
+	so->bio.ahead.pe = NULL;
+} /* so_resetssl() */
+
+int so_starttls(struct socket *so, const struct so_starttls *cfg) {
+	SSL_CTX *ctx, *tmp = NULL;
 	const SSL_METHOD *method;
+	int error;
 
 	if (so->done & SO_S_STARTTLS)
 		return 0;
@@ -1916,32 +2042,40 @@ int so_starttls(struct socket *so, SSL_CTX *ctx) {
 	if (so->todo & SO_S_STARTTLS)
 		goto check;
 
-	/*
-	 * reset SSL state
-	 */
-	ssl_discard(&so->ssl.ctx);
-	so->ssl.state  = 0;
-	so->ssl.error  = 0;
-	so->ssl.accept = 0;
-	so->ssl.vrfd   = 0;
+	cfg = (cfg)? cfg : &(struct so_starttls){ 0 };
+
+	so_resetssl(so);
 
 	/*
-	 * NOTE: Store any error in so->ssl.error because callers expect to
-	 * call-and-forget this routine, similar to so_connect() and
-	 * so_listen(). Likewise, commit to the SO_S_STARTTLS state at this
-	 * point, no matter whether we can allocate the proper objects, so
-	 * any errors will persist--so_starttls_() immediately returns if
-	 * so->ssl.error is set.
+	 * NOTE: Commit to the SO_S_STARTTLS state at this point, no matter
+	 * whether we can allocate the proper objects, so any errors will
+	 * persist. so_starttls_() immediately returns if so->ssl.error is
+	 * set. See NOTE at error label below.
 	 */
 	so->todo |= SO_S_STARTTLS;
 
+	if (cfg->pushback.iov_len > 0) {
+		if (!(so->bio.ahead.data = malloc(cfg->pushback.iov_len))) {
+			error = errno;
+			goto error;
+		}
+
+		memcpy(so->bio.ahead.data, cfg->pushback.iov_base, cfg->pushback.iov_len);
+		so->bio.ahead.p = so->bio.ahead.data;
+		so->bio.ahead.pe = so->bio.ahead.p + cfg->pushback.iov_len;
+	}
+
 	ERR_clear_error();
 
-	if (!ctx && !(ctx = tmp = SSL_CTX_new(SSLv23_method())))
-		goto error;
+	if (!(ctx = cfg->context)) {
+		method = (cfg->method)? cfg->method : SSLv23_method();
+
+		if (!(ctx = tmp = SSL_CTX_new((SSL_METHOD *)method)))
+			goto eossl;
+	}
 
 	if (!(so->ssl.ctx = SSL_new(ctx)))
-		goto error;
+		goto eossl;
 
 	SSL_set_mode(so->ssl.ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
 	SSL_set_mode(so->ssl.ctx, SSL_MODE_ENABLE_PARTIAL_WRITE);
@@ -1960,7 +2094,7 @@ int so_starttls(struct socket *so, SSL_CTX *ctx) {
 
 	if (!so->ssl.accept && so->opts.tls_sendname && so->opts.tls_sendname != SO_OPTS_TLS_HOSTNAME) {
 		if (!SSL_set_tlsext_host_name(so->ssl.ctx, so->opts.tls_sendname))
-			goto error;
+			goto eossl;
 	}
 
 	if (tmp)
@@ -1968,8 +2102,15 @@ int so_starttls(struct socket *so, SSL_CTX *ctx) {
 
 check:
 	return so_exec(so);
+eossl:
+	error = SO_EOPENSSL;
 error:
-	so->ssl.error = SO_EOPENSSL;
+	/*
+	 * NOTE: Store any error in so->ssl.error because callers expect to
+	 * call-and-forget this routine, similar to so_connect() and
+	 * so_listen(), but we still need to replay the error.
+	 */
+	so->ssl.error = error;
 
 	if (tmp)
 		SSL_CTX_free(tmp);
@@ -2003,8 +2144,272 @@ int so_shutdown(struct socket *so, int how) {
 } /* so_shutdown() */
 
 
-size_t so_read(struct socket *so, void *dst, size_t lim, int *error_) {
+static size_t so_sysread(struct socket *so, void *dst, size_t lim, int *error) {
 	long len;
+
+retry:
+#if _WIN32
+	len = recv(so->fd, dst, SO_MIN(lim, LONG_MAX), 0);
+#else
+	len = read(so->fd, dst, SO_MIN(lim, LONG_MAX));
+#endif
+
+	if (len == -1)
+		goto error;
+	if (len == 0)
+		goto epipe;
+
+	return len;
+epipe:
+	*error = EPIPE;
+	so->st.rcvd.eof = 1;
+
+	return 0;
+error:
+	*error = so_soerr();
+
+	switch (*error) {
+	case SO_EINTR:
+		goto retry;
+#if SO_EWOULDBLOCK != SO_EAGAIN
+	case SO_EWOULDBLOCK:
+		*error = SO_EAGAIN;
+		/* FALL THROUGH */
+#endif
+	case SO_EAGAIN:
+		so->events |= POLLIN;
+		break;
+	} /* switch() */
+
+	return 0;
+} /* so_sysread() */
+
+static size_t so_syswrite(struct socket *so, const void *src, size_t len, int *error) {
+	long count;
+
+	if (so->st.sent.eof) {
+		*error = EPIPE;
+		return 0;
+	}
+
+//	so_pipeign(so, 0);
+retry:
+#if _WIN32
+	count = send(so->fd, src, SO_MIN(len, LONG_MAX), 0);
+#else
+#if defined(MSG_NOSIGNAL)
+	if (S_ISSOCK(so->mode) && so->opts.fd_nosigpipe) {
+		count = send(so->fd, src, SO_MIN(len, LONG_MAX), MSG_NOSIGNAL);
+	} else {
+		count = write(so->fd, src, SO_MIN(len, LONG_MAX));
+	}
+#else
+	count = write(so->fd, src, SO_MIN(len, LONG_MAX));
+#endif
+#endif
+
+	if (count == -1)
+		goto error;
+
+//	so_pipeok(so, 0);
+
+	return count;
+error:
+	*error = so_soerr();
+
+	switch (*error) {
+	case EPIPE:
+		so->st.sent.eof = 1;
+		break;
+	case SO_EINTR:
+		goto retry;
+#if SO_EWOULDBLOCK != SO_EAGAIN
+	case SO_EWOULDBLOCK:
+		*error = SO_EAGAIN;
+		/* FALL THROUGH */
+#endif
+	case SO_EAGAIN:
+		so->events |= POLLOUT;
+		break;
+	} /* switch() */
+
+//	so_pipeok(so, 0);
+
+	return 0;
+} /* so_syswrite() */
+
+
+static _Bool bio_nonfatal(int error) {
+	switch (error) {
+	case SO_EAGAIN:
+	case SO_EALREADY:
+	case SO_EINPROGRESS:
+	case SO_EINTR:
+	case SO_ENOTCONN: /* FIXME (bss_sock.c has this but is it correct?) */
+		return 1;
+	default:
+		return 0;
+	}
+} /* bio_nonfatal() */
+
+static int bio_read(BIO *bio, char *dst, int lim) {
+	struct socket *so = bio->ptr;
+	size_t count;
+
+	assert(so);
+	assert(lim >= 0);
+
+	BIO_clear_retry_flags(bio);
+	so->bio.error = 0;
+
+	if (so->bio.ahead.p < so->bio.ahead.pe) {
+		count = SO_MIN(so->bio.ahead.pe - so->bio.ahead.p, lim);
+		memcpy(dst, so->bio.ahead.p, count);
+		so->bio.ahead.p += count;
+
+		return count;
+	}
+
+	if ((count = so_sysread(so, dst, lim, &so->bio.error)))
+		return (int)count;
+
+	if (bio_nonfatal(so->bio.error))
+		BIO_set_retry_read(bio);
+
+	/* see note about SSL_ERROR_SYSCALL at bio_write */
+	errno = so->bio.error;
+
+	return (so->bio.error == EPIPE)? 0 : -1;
+} /* bio_read() */
+
+static int bio_write(BIO *bio, const char *src, int len) {
+	struct socket *so = bio->ptr;
+	size_t count;
+
+	assert(so);
+	assert(len >= 0);
+
+	BIO_clear_retry_flags(bio);
+	so->bio.error = 0;
+
+	if ((count = so_syswrite(so, src, len, &so->bio.error)))
+		return (int)count;
+
+	if (bio_nonfatal(so->bio.error))
+		BIO_set_retry_write(bio);
+
+	/*
+	 * SSL_get_error will return SSL_ERROR_SYSCALL, expecting errno to
+	 * be set.
+	 */
+	errno = so->bio.error;
+
+	return -1;
+} /* bio_write() */
+
+static int bio_puts(BIO *bio, const char *src) {
+	size_t len = strlen(src);
+
+	return bio_write(bio, src, (int)SO_MIN(len, INT_MAX));
+} /* bio_puts() */
+
+static long bio_ctrl(BIO *bio, int cmd, long udata_i, void *udata_p) {
+	(void)bio;
+	(void)udata_i;
+
+	switch (cmd) {
+	case BIO_CTRL_DUP: {
+		/*
+		 * We'll permit duping, just like all the other BIOs do by
+		 * default and so we don't inadvertently break something.
+		 * But we won't copy our state because our memory management
+		 * assumes 1:1 mapping between BIO and socket objects. And
+		 * just to be safe, zero the state members. BIO_dup_chain,
+		 * for example, has a hack to always copy .init and .num.
+		 */
+		BIO *udata = udata_p;
+		udata->init = 0;
+		udata->num = 0;
+		udata->ptr = NULL;
+
+		return 1;
+	}
+	case BIO_CTRL_FLUSH:
+		return 1;
+	default:
+		/*
+		 * BIO_ctrl manual page says
+		 *
+		 * 	Source/sink BIOs return an 0 if they do not
+		 * 	recognize the BIO_ctrl() operation.
+		 */
+		return 0;
+	} /* switch() */
+} /* bio_ctrl() */
+
+static int bio_create(BIO *bio) {
+	bio->init = 0;
+	bio->shutdown = 0;
+	bio->num = 0;
+	bio->ptr = NULL;
+
+	return 1;
+} /* bio_create() */
+
+static int bio_destroy(BIO *bio) {
+	bio->init = 0;
+	bio->shutdown = 0;
+	bio->num = 0;
+	bio->ptr = NULL;
+
+	return 1;
+} /* bio_destroy() */
+
+static BIO_METHOD bio_methods = {
+	BIO_TYPE_SOURCE_SINK,
+	"struct socket*",
+	bio_write,
+	bio_read,
+	bio_puts,
+	NULL,
+	bio_ctrl,
+	bio_create,
+	bio_destroy,
+	NULL,
+};
+
+static BIO *so_newbio(struct socket *so, int *error) {
+	BIO *bio;
+
+	if (!(bio = BIO_new(&bio_methods))) {
+		*error = SO_EOPENSSL;
+		return NULL;
+	}
+
+	bio->init = 1;
+	bio->ptr = so;
+
+	/*
+	 * NOTE: Applications can acquire a reference to our BIO via the SSL
+	 * state object. The lifetime of the BIO could last longer than the
+	 * lifetime of our socket object, so we must keep our own reference
+	 * and zero any pointer to ourselves here and from so_destroy.
+	 */
+	if (so->bio.ctx) {
+		so->bio.ctx->init = 0;
+		so->bio.ctx->ptr = NULL;
+		BIO_free(so->bio.ctx);
+	}
+
+	CRYPTO_add(&bio->references, 1, CRYPTO_LOCK_BIO);
+	so->bio.ctx = bio;
+
+	return bio;
+} /* so_newbio() */
+
+
+size_t so_read(struct socket *so, void *dst, size_t lim, int *error_) {
+	size_t len;
 	int error;
 
 	so_pipeign(so, 1);
@@ -2016,37 +2421,30 @@ size_t so_read(struct socket *so, void *dst, size_t lim, int *error_) {
 
 	if (so->fd == -1) {
 		error = ENOTCONN;
-
 		goto error;
 	}
 
 	so->events &= ~POLLIN;
-
 retry:
 	if (so->ssl.ctx) {
+		int n;
+
 		ERR_clear_error();
 
-		len = SSL_read(so->ssl.ctx, dst, SO_MIN(lim, INT_MAX));
-
-		if (len < 0) {
-			goto sslerr;
-		} else if (len == 0) {
-			*error_ = EPIPE; /* FIXME: differentiate clean from unclean shutdown? */
+		if ((n = SSL_read(so->ssl.ctx, dst, SO_MIN(lim, INT_MAX))) < 0) {
+			if (SO_EINTR == (error = ssl_error(so->ssl.ctx, n, &so->events)))
+				goto retry;
+			goto error;
+		} else if (n == 0) {
+			error = EPIPE; /* FIXME: differentiate clean from unclean shutdown? */
 			so->st.rcvd.eof = 1;
+			goto error;
 		}
+
+		len = n;
 	} else {
-#if _WIN32
-		len = recv(so->fd, dst, SO_MIN(lim, LONG_MAX), 0);
-#else
-		len = read(so->fd, dst, SO_MIN(lim, LONG_MAX));
-#endif
-
-		if (len == -1) {
-			goto soerr;
-		} else if (len == 0) {
-			*error_ = EPIPE;
-			so->st.rcvd.eof = 1;
-		}
+		if (!(len = so_sysread(so, dst, lim, &error)))
+			goto error;
 	}
 
 	so_trace(SO_T_READ, so->fd, so->host, dst, (size_t)len, "rcvd %zu bytes", (size_t)len);
@@ -2055,28 +2453,6 @@ retry:
 	so_pipeok(so, 1);
 
 	return len;
-sslerr:
-	error = ssl_error(so->ssl.ctx, (int)len, &so->events);
-
-	if (error == SO_EINTR)
-		goto retry;
-
-	goto error;
-soerr:
-	error = so_soerr();
-
-	switch (error) {
-	case SO_EINTR:
-		goto retry;
-#if SO_EWOULDBLOCK != SO_EAGAIN
-	case SO_EWOULDBLOCK:
-		/* FALL THROUGH */
-#endif
-	case SO_EAGAIN:
-		so->events |= POLLIN;
-
-		break;
-	} /* switch() */
 error:
 	*error_ = error;
 
@@ -2090,7 +2466,7 @@ error:
 
 
 size_t so_write(struct socket *so, const void *src, size_t len, int *error_) {
-	long count;
+	size_t count;
 	int error;
 
 	so_pipeign(so, 0);
@@ -2102,41 +2478,34 @@ size_t so_write(struct socket *so, const void *src, size_t len, int *error_) {
 
 	if (so->fd == -1) {
 		error = ENOTCONN;
-
 		goto error;
 	}
 
 	so->events &= ~POLLOUT;
-
 retry:
 	if (so->ssl.ctx) {
 		if (len > 0) {
+			int n;
+
 			ERR_clear_error();
 
-			count = SSL_write(so->ssl.ctx, src, SO_MIN(len, INT_MAX));
+			if ((n = SSL_write(so->ssl.ctx, src, SO_MIN(len, INT_MAX))) < 0) {
+				if (SO_EINTR == (error = ssl_error(so->ssl.ctx, n, &so->events)))
+					goto retry;
+				goto error;
+			} else if (n == 0) {
+				error = EPIPE; /* FIXME: differentiate clean from unclean shutdown? */
+				so->st.sent.eof = 1;
+				goto error;
+			}
 
-			if (count < 0)
-				goto sslerr;
-			else if (count == 0)
-				*error_ = EPIPE; /* FIXME: differentiate clean from unclean shutdown? */
-		} else
+			count = n;
+		} else {
 			count = 0;
+		}
 	} else {
-#if _WIN32
-		count = send(so->fd, src, SO_MIN(len, LONG_MAX), 0);
-#else
-#if defined(MSG_NOSIGNAL)
-		if (S_ISSOCK(so->mode) && so->opts.fd_nosigpipe)
-			count = send(so->fd, src, SO_MIN(len, LONG_MAX), MSG_NOSIGNAL);
-		else
-			count = write(so->fd, src, SO_MIN(len, LONG_MAX));
-#else
-		count = write(so->fd, src, SO_MIN(len, LONG_MAX));
-#endif
-#endif
-
-		if (count == -1)
-			goto soerr;
+		if (!(count = so_syswrite(so, src, len, &error)))
+			goto error;
 	}
 
 	so_trace(SO_T_WRITE, so->fd, so->host, src, (size_t)count, "sent %zu bytes", (size_t)len);
@@ -2145,28 +2514,6 @@ retry:
 	so_pipeok(so, 0);
 
 	return count;
-sslerr:
-	error = ssl_error(so->ssl.ctx, (int)count, &so->events);
-
-	if (error == SO_EINTR)
-		goto retry;
-
-	goto error;
-soerr:
-	error = so_soerr();
-
-	switch (error) {
-	case SO_EINTR:
-		goto retry;
-#if SO_EWOULDBLOCK != SO_EAGAIN
-	case SO_EWOULDBLOCK:
-		/* FALL THROUGH */
-#endif
-	case SO_EAGAIN:
-		so->events |= POLLOUT;
-
-		break;
-	} /* switch() */
 error:
 	*error_ = error;
 
@@ -2195,7 +2542,6 @@ size_t so_peek(struct socket *so, void *dst, size_t lim, int flags, int *_error)
 
 	if (flags & SO_F_PEEKALL)
 		so->events &= ~POLLIN;
-
 retry:
 	count = recv(so->fd, dst, lim, MSG_PEEK);
 

@@ -89,24 +89,42 @@ local loader = function(loader, ...)
 	--
 	-- Step until an error is encountered.
 	--
-	core.interpose("loop", function (self, timeout)
-		local ok, why
+	local function todeadline(timeout)
+		-- special case 0 timeout to avoid monotime call in totimeout
+		return timeout and (timeout > 0 and monotime() + timeout or 0) or nil
+	end -- todeadline
 
-		if timeout then
-			local curtime = monotime()
-			local deadline = curtime + timeout
-
-			repeat
-				ok, why = self:step(deadline - curtime)
-				curtime = monotime()
-			until not ok or deadline <= curtime or self:empty()
+	local function totimeout(deadline)
+		if not deadline then
+			return nil, false
+		elseif deadline == 0 then
+			return 0, true
 		else
-			repeat
-				ok, why = self:step()
-			until not ok or self:empty()
+			local curtime = monotime()
+
+			if curtime < deadline then
+				return deadline - curtime, false
+			else
+				return  0, true
+			end
+		end
+	end -- totimeout
+
+	core.interpose("loop", function (self, timeout)
+		local function checkstep(self, deadline, ok, ...)
+			local timeout, expired = totimeout(deadline)
+
+			if not ok then
+				return false, ...
+			elseif expired or self:empty() then
+				return true
+			else
+				return checkstep(self, deadline, self:step(timeout))
+			end
 		end
 
-		return ok, why
+		local deadline = todeadline(timeout)
+		return checkstep(self, deadline, self:step(timeout))
 	end) -- core:loop
 
 	--
@@ -115,32 +133,11 @@ local loader = function(loader, ...)
 	-- Return iterator over core:loop.
 	--
 	core.interpose("errors", function (self, timeout)
-		if timeout then
-			local deadline = monotime() + timeout
+		local deadline = todeadline(timeout)
 
-			return function ()
-				local curtime = monotime()
-
-				if curtime < deadline then
-					local ok, why = self:loop(deadline - curtime)
-
-					if not ok then
-						return why
-					end
-				end
-
-				return --> nothing, to end for loop
-			end
-		else
-			return function ()
-				local ok, why = self:loop()
-
-				if not ok then
-					return why
-				end
-
-				return --> nothing, to end for loop
-			end
+		return function ()
+			local timeout = totimeout(deadline)
+			return select(2, self:loop(timeout))
 		end
 	end) -- core:errors
 

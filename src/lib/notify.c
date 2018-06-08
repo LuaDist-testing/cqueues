@@ -46,14 +46,49 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#define HAVE_INOTIFY    (defined __linux__)
-#define HAVE_FEN        (defined __sun)
-#define HAVE_KQUEUE     (!HAVE_INOTIFY && !HAVE_FEN)
-#define HAVE_KQUEUE1    (__NetBSD_Version__ >= 600000000)
-#define HAVE_OPENAT     (!__NetBSD__ && !__APPLE__)
-#define HAVE_FDOPENDIR  (!__NetBSD__ && !__APPLE__)
-#define HAVE_O_CLOEXEC  (defined O_CLOEXEC)
+#ifndef HAVE_INOTIFY
+#define HAVE_INOTIFY (defined __linux__)
+#endif
+
+#ifndef HAVE_INOTIFY_INIT1
+#define HAVE_INOTIFY_INIT1 (HAVE_IN_CLOEXEC)
+#endif
+
+#ifndef HAVE_FEN
+#define HAVE_FEN (defined __sun)
+#endif
+
+#ifndef HAVE_KQUEUE
+#define HAVE_KQUEUE (!HAVE_INOTIFY && !HAVE_FEN)
+#endif
+
+#ifndef HAVE_KQUEUE1
+#define HAVE_KQUEUE1 (__NetBSD_Version__ >= 600000000)
+#endif
+
+#ifndef HAVE_OPENAT
+#define HAVE_OPENAT (!__NetBSD__ && !__APPLE__)
+#endif
+
+#ifndef HAVE_FDOPENDIR
+#define HAVE_FDOPENDIR (!__NetBSD__ && !__APPLE__)
+#endif
+
+#ifndef HAVE_O_CLOEXEC
+#define HAVE_O_CLOEXEC (defined O_CLOEXEC)
+#endif
+
+#ifndef HAVE_O_DIRECTORY
+#define HAVE_O_DIRECTORY (defined O_DIRECTORY)
+#endif
+
+#ifndef HAVE_IN_CLOEXEC
 #define HAVE_IN_CLOEXEC (defined IN_CLOEXEC)
+#endif
+
+#ifndef HAVE_IN_NONBLOCK
+#define HAVE_IN_NONBLOCK (defined IN_NONBLOCK)
+#endif
 
 #if HAVE_INOTIFY
 
@@ -156,7 +191,7 @@ const char *notify_strflag(int flag) {
 
 #define countof(a) (sizeof (a) / sizeof *(a))
 
-#define LIST_MOVE(head, elm, le) do { \
+#define NFY_LIST_MOVE(head, elm, le) do { \
 	LIST_REMOVE((elm), le); \
 	LIST_INSERT_HEAD((head), (elm), le); \
 } while (0)
@@ -238,11 +273,11 @@ static int (nfy_openfd)(int *_fd, const struct nfy_open *opts) {
 		flags |= O_TRUNC;
 	if (opts->nofollow)
 		flags |= O_NOFOLLOW;
-#if defined O_CLOEXEX
+#if HAVE_O_CLOEXEC
 	if (opts->cloexec)
 		flags |= O_CLOEXEC;
 #endif
-#if defined O_DIRETORY
+#if HAVE_O_DIRECTORY
 	if (opts->directory)
 		flags |= O_DIRECTORY;
 #endif
@@ -253,7 +288,7 @@ static int (nfy_openfd)(int *_fd, const struct nfy_open *opts) {
 			goto syerr;
 #else
 		if (opts->chdir) {
-#if defined O_CLOEXEC
+#if HAVE_O_CLOEXEC
 			if (-1 == (wd = open(".", O_RDONLY|O_CLOEXEC)))
 				goto syerr;
 #else
@@ -439,7 +474,7 @@ static struct file *lookup(struct notify *nfy, const char *name, size_t namelen)
 static void change(struct notify *nfy, struct file *file, int changes) {
 	if (changes & file->flags) {
 		file->changes |= (file->flags & changes);
-		LIST_MOVE(&nfy->changed, file, le);
+		NFY_LIST_MOVE(&nfy->changed, file, le);
 	}
 } /* change() */
 
@@ -447,24 +482,24 @@ static void change(struct notify *nfy, struct file *file, int changes) {
 static void status(struct notify *nfy, struct file *file, enum status status) {
 	switch (status) {
 	case S_DEFUNCT:
-		LIST_MOVE(&nfy->defunct, file, sle);
+		NFY_LIST_MOVE(&nfy->defunct, file, sle);
 		break;
 	case S_POLLING:
-		LIST_MOVE(&nfy->polling, file, sle);
+		NFY_LIST_MOVE(&nfy->polling, file, sle);
 
 		if (file->status != status)
 			change(nfy, file, (file->status == S_REVOKED)? NOTIFY_ATTRIB : NOTIFY_CREATE);
 
 		break;
 	case S_REVOKED:
-		LIST_MOVE(&nfy->revoked, file, sle);
+		NFY_LIST_MOVE(&nfy->revoked, file, sle);
 
 		if (file->status != status)
 			change(nfy, file, NOTIFY_REVOKE);
 
 		break;
 	case S_DELETED:
-		LIST_MOVE(&nfy->deleted, file, sle);
+		NFY_LIST_MOVE(&nfy->deleted, file, sle);
 
 		if (file->status != status)
 			change(nfy, file, NOTIFY_DELETE);
@@ -517,7 +552,7 @@ struct notify *notify_opendir(const char *dirpath, int flags, int *_error) {
 	memcpy(nfy->dirpath, dirpath, dirlen);
 
 #if HAVE_INOTIFY
-#if defined IN_NONBLOCK && defined IN_CLOEXEC
+#if HAVE_INOTIFY_INIT1 && HAVE_IN_NONBLOCK && HAVE_IN_CLOEXEC
 	if (-1 == (nfy->fd = inotify_init1(IN_NONBLOCK|IN_CLOEXEC)))
 		goto syerr;
 #else
@@ -694,7 +729,7 @@ static int in_step1(struct notify *nfy) {
 
 				if ((file = lookup(nfy, msg->name, namelen))) {
 					file->changes |= decode(msg->mask);
-					LIST_MOVE(&nfy->pending, file, le);
+					NFY_LIST_MOVE(&nfy->pending, file, le);
 				}
 			} else {
 				nfy->changes |= decode(msg->mask);
@@ -765,9 +800,9 @@ static int in_post(struct notify *nfy) {
 		file->changes &= file->flags;
 
 		if (file->changes)
-			LIST_MOVE(&nfy->changed, file, le);
+			NFY_LIST_MOVE(&nfy->changed, file, le);
 		else
-			LIST_MOVE(&nfy->dormant, file, le);
+			NFY_LIST_MOVE(&nfy->dormant, file, le);
 	}
 
 	nfy->dirty = 0;
@@ -799,7 +834,7 @@ static int fen_step(struct notify *nfy, int timeout) {
 		} else {
 			struct file *file = event[i].portev_user;
 			file->changes |= decode(event[i].portev_events);
-			LIST_MOVE(&nfy->pending, file, le);
+			NFY_LIST_MOVE(&nfy->pending, file, le);
 		}
 	}
 
@@ -864,9 +899,9 @@ static int fen_post(struct notify *nfy) {
 		file->changes &= file->flags;
 
 		if (file->changes)
-			LIST_MOVE(&nfy->changed, file, le);
+			NFY_LIST_MOVE(&nfy->changed, file, le);
 		else
-			LIST_MOVE(&nfy->dormant, file, le);
+			NFY_LIST_MOVE(&nfy->dormant, file, le);
 	}
 
 	if (nfy->dirty) {
@@ -919,7 +954,7 @@ static int kq_step(struct notify *nfy, int timeout) {
 		} else {
 			file = (void *)event[i].udata;
 			file->changes |= decode(event[i].fflags);
-			LIST_MOVE(&nfy->pending, file, le);
+			NFY_LIST_MOVE(&nfy->pending, file, le);
 		}
 	}
 
@@ -991,9 +1026,9 @@ static int kq_post(struct notify *nfy) {
 		file->changes &= file->flags;
 
 		if (file->changes)
-			LIST_MOVE(&nfy->changed, file, le);
+			NFY_LIST_MOVE(&nfy->changed, file, le);
 		else
-			LIST_MOVE(&nfy->dormant, file, le);
+			NFY_LIST_MOVE(&nfy->dormant, file, le);
 	}
 
 	if (nfy->dirty) {
@@ -1088,13 +1123,13 @@ int notify_add(struct notify *nfy, const char *name, int flags) {
 	if ((error = kq_readd(nfy, file)))
 		goto error;
 
-	LIST_MOVE(&nfy->dormant, file, le);
+	NFY_LIST_MOVE(&nfy->dormant, file, le);
 	nfy->changes = 0;
 #elif HAVE_FEN
 	if ((error = fen_readd(nfy, file)))
 		goto error;
 
-	LIST_MOVE(&nfy->dormant, file, le);
+	NFY_LIST_MOVE(&nfy->dormant, file, le);
 	nfy->changes = 0;
 #endif
 
@@ -1127,7 +1162,7 @@ int notify_get(struct notify *nfy, const char **name) {
 	int changes;
 
 	if ((file = LIST_FIRST(&nfy->changed))) {
-		LIST_MOVE(&nfy->dormant, file, le);
+		NFY_LIST_MOVE(&nfy->dormant, file, le);
 
 		if (name)
 			*name = file->name;

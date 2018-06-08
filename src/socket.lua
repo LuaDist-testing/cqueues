@@ -6,7 +6,6 @@ local errno = require("cqueues.errno")
 
 local poll = cqueues.poll
 local monotime = cqueues.monotime
-local running = cqueues.running
 
 local AF_INET = socket.AF_INET
 local AF_INET6 = socket.AF_INET6
@@ -53,8 +52,8 @@ local function logname(so)
 
 	if af == AF_INET or af == AF_INET6 then
 		return format("%s.%s", addr, port)
-	elseif af == AF_UNIX and #addr > 0 then
-		return format("unix:%s", addr)
+	elseif af == AF_UNIX then
+		return format("unix:%s", addr or "unnamed")
 	end
 end -- logname
 
@@ -213,10 +212,15 @@ end)
 --
 -- Yielding socket:accept
 --
-local _accept; _accept = socket.interpose("accept", function(self, timeout)
-	local timeout = timeout or self:timeout()
+local _accept; _accept = socket.interpose("accept", function(self, opts, timeout)
+	-- :accept used to take just a timeout as argument
+	if type(opts) == "number" then
+		timeout, opts = opts, nil
+	else
+		timeout = timeout or self:timeout()
+	end
 	local deadline = timeout and (monotime() + timeout)
-	local con, why = _accept(self)
+	local con, why = _accept(self, opts)
 
 	while not con do
 		if why == EAGAIN then
@@ -227,7 +231,7 @@ local _accept; _accept = socket.interpose("accept", function(self, timeout)
 			return nil, oops(self, "accept", why)
 		end
 
-		con, why = _accept(self)
+		con, why = _accept(self, opts)
 	end
 
 	return con
@@ -237,8 +241,8 @@ end)
 --
 -- Add socket:clients
 --
-socket.interpose("clients", function(self, timeout)
-	return function() return self:accept(timeout) end
+socket.interpose("clients", function(self, opts, timeout)
+	return function() return self:accept(opts, timeout) end
 end)
 
 
@@ -283,17 +287,6 @@ local _starttls; _starttls = socket.interpose("starttls", function(self, arg1, a
 	elseif type(arg2) == "number" then
 		timeout = arg2
 	else
-		-- NOTE: Backwards compatibility for old behavior, where an
-		-- absent timeout simply returned immediately without
-		-- polling.
-		--
-		-- Earlier code examples called :starttls outside of the
-		-- event loop, and so we cannot yield in those cases without
-		-- needlessly breaking such code.
-		if not running() then
-			return _starttls(self, ctx)
-		end
-
 		timeout = self:timeout()
 	end
 

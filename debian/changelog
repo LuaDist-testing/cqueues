@@ -1,3 +1,70 @@
+liblua-cqueues (20150907-0) unstable; urgency=low
+
+  * Fix bugs with getsockname and getpeername--AF_UNIX sockaddr length
+    can vary considerably based on system call and operating system. Report
+    and fixes from daurnimator. See PORTING.md for extended description of
+    varying behavior.
+  * Fix to socket.fdopen for regular files. Report and fix from daurnimator.
+  * Allow non-string error objects to be returned from cqueues:step, et al.
+    Fix from daurnimator.
+  * Set contoller alert on cancellation to ensure any controller polling on
+    that controller wakes up. Report by daurnimator.
+  * Enhance accept to take an options argument. Fix from daurnimator.
+  * Fix wrong order of parameters to fcntl in socket.dup.
+  * Set errno when returning from BIO hooks as OpenSSL expects
+    unrecoverable, generic error values to be in errno. Report by
+    daurnimator.
+  * Fix stack offsets in config:getlookup and config:getsearch. Report and
+    fixes from tibboh.
+
+ -- William Ahern <william@25thandClement.com>  Mon, 07 Sep 2015 19:30:21 -0700
+
+liblua-cqueues (20150727-0) unstable; urgency=low
+
+  * Fix bugs in cqueues.cancel. Report and fixes from daurnimator.
+
+ -- William Ahern <william@25thandClement.com>  Mon, 27 Jul 2015 01:38:54 -0700
+
+liblua-cqueues (20150630-0) unstable; urgency=low
+
+  * Replace remaining uses of strerror with thread-safe cqs_strerror macro.
+
+ -- William Ahern <william@25thandClement.com>  Tue, 30 Jun 2015 14:03:15 -0700
+
+liblua-cqueues (20150629-0) unstable; urgency=low
+
+  * Add autoflush support, enabled by default, which automatically flushes
+    the output buffer during reads and when initiating TLS.
+  * Add pushback support, enabled by default, which pushes data in the input
+    buffer back to the socket layer so it's read as part of the TLS
+    handshake.
+  * Ignore EOPNOTSUPP when trying to reset SO_REUSEPORT.
+
+ -- William Ahern <william@25thandClement.com>  Tue, 30 Jun 2015 12:04:16 -0700
+
+liblua-cqueues (20150616-0) unstable; urgency=low
+
+  * Add support for POLLPRI.
+  * Fix Solaris Ports controller alerts.
+  * Add support for eventfd for controller alerts.
+  * Synchronize dns.c with upstream.
+  * Various bug fixes.
+
+ -- William Ahern <william@25thandClement.com>  Tue, 16 Jun 2015 15:37:34 -0700
+
+liblua-cqueues (20150310-0) unstable; urgency=low
+
+  * :step, :loop, and :errors now return additional error information.
+
+ -- William Ahern <william@25thandClement.com>  Tue, 10 Mar 2015 21:38:56 -0700
+
+liblua-cqueues (20150218-0) unstable; urgency=low
+
+  * Use newproxy to detect object leaks in Lua 5.1/LuaJIT because Lua 5.1
+    language doesn't support __gc metamethods on tables. (daurnimator)
+
+ -- William Ahern <william@25thandClement.com>  Wed, 18 Feb 2015 20:45:12 -0800
+
 liblua-cqueues (20150119-0) unstable; urgency=low
 
   * Return EAFNOSUPPORT for unknown .sa_bind address family (sa_len == 0)

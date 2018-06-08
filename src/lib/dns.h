@@ -1,7 +1,7 @@
 /* ==========================================================================
  * dns.h - Recursive, Reentrant DNS Resolver.
  * --------------------------------------------------------------------------
- * Copyright (c) 2009, 2010, 2012, 2013, 2014  William Ahern
+ * Copyright (c) 2009, 2010, 2012, 2013, 2014, 2015  William Ahern
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -63,11 +63,11 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#define DNS_VENDOR "william+cqueues@25thandClement.com"
+#define DNS_VENDOR "william@25thandClement.com"
 
-#define DNS_V_REL  0x20140930
-#define DNS_V_ABI  0x20121013
-#define DNS_V_API  0x20140930
+#define DNS_V_REL  0x20150630
+#define DNS_V_ABI  0x20150612
+#define DNS_V_API  0x20150612
 
 
 const char *dns_vendor(void);
@@ -108,7 +108,9 @@ enum dns_errno {
 	DNS_ENOQUERY,
 	DNS_ENOANSWER,
 	DNS_EFETCHED,
-	DNS_ESERVICE,
+	DNS_ESERVICE, /* EAI_SERVICE */
+	DNS_ENONAME,  /* EAI_NONAME */
+	DNS_EFAIL,    /* EAI_FAIL */
 	DNS_ELAST,
 }; /* dns_errno */
 
@@ -312,6 +314,8 @@ enum dns_rcode dns_ircode(const char *);
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 typedef unsigned long dns_atomic_t;
+
+typedef unsigned long dns_refcount_t; /* must be same value type as dns_atomic_t */
 
 
 /*
@@ -815,9 +819,9 @@ struct dns_hosts *dns_hosts_open(int *);
 
 void dns_hosts_close(struct dns_hosts *);
 
-unsigned dns_hosts_acquire(struct dns_hosts *);
+dns_refcount_t dns_hosts_acquire(struct dns_hosts *);
 
-unsigned dns_hosts_release(struct dns_hosts *);
+dns_refcount_t dns_hosts_release(struct dns_hosts *);
 
 struct dns_hosts *dns_hosts_mortal(struct dns_hosts *);
 
@@ -880,9 +884,9 @@ struct dns_resolv_conf *dns_resconf_open(int *);
 
 void dns_resconf_close(struct dns_resolv_conf *);
 
-unsigned dns_resconf_acquire(struct dns_resolv_conf *);
+dns_refcount_t dns_resconf_acquire(struct dns_resolv_conf *);
 
-unsigned dns_resconf_release(struct dns_resolv_conf *);
+dns_refcount_t dns_resconf_release(struct dns_resolv_conf *);
 
 struct dns_resolv_conf *dns_resconf_mortal(struct dns_resolv_conf *);
 
@@ -922,9 +926,9 @@ struct dns_hints *dns_hints_open(struct dns_resolv_conf *, int *);
 
 void dns_hints_close(struct dns_hints *);
 
-unsigned dns_hints_acquire(struct dns_hints *);
+dns_refcount_t dns_hints_acquire(struct dns_hints *);
 
-unsigned dns_hints_release(struct dns_hints *);
+dns_refcount_t dns_hints_release(struct dns_hints *);
 
 struct dns_hints *dns_hints_mortal(struct dns_hints *);
 
@@ -961,8 +965,8 @@ unsigned dns_hints_grep(struct sockaddr **, socklen_t *, unsigned, struct dns_hi
 struct dns_cache {
 	void *state;
 
-	dns_atomic_t (*acquire)(struct dns_cache *);
-	dns_atomic_t (*release)(struct dns_cache *);
+	dns_refcount_t (*acquire)(struct dns_cache *);
+	dns_refcount_t (*release)(struct dns_cache *);
 
 	struct dns_packet *(*query)(struct dns_packet *, struct dns_cache *, int *);
 
@@ -978,6 +982,10 @@ struct dns_cache {
 		long i;
 		void *p;
 	} arg[3];
+
+	struct { /* PRIVATE */
+		dns_atomic_t refcount;
+	} _;
 }; /* struct dns_cache */
 
 
@@ -1087,13 +1095,15 @@ void dns_res_reset(struct dns_resolver *);
 
 void dns_res_close(struct dns_resolver *);
 
-unsigned dns_res_acquire(struct dns_resolver *);
+dns_refcount_t dns_res_acquire(struct dns_resolver *);
 
-unsigned dns_res_release(struct dns_resolver *);
+dns_refcount_t dns_res_release(struct dns_resolver *);
 
 struct dns_resolver *dns_res_mortal(struct dns_resolver *);
 
 int dns_res_submit(struct dns_resolver *, const char *, enum dns_type, enum dns_class);
+
+int dns_res_submit2(struct dns_resolver *, const char *, size_t, enum dns_type, enum dns_class);
 
 int dns_res_check(struct dns_resolver *);
 
@@ -1114,6 +1124,8 @@ int dns_res_poll(struct dns_resolver *, int);
 struct dns_packet *dns_res_query(struct dns_resolver *, const char *, enum dns_type, enum dns_class, int, int *);
 
 const struct dns_stat *dns_res_stat(struct dns_resolver *);
+
+void dns_res_sethints(struct dns_resolver *, struct dns_hints *);
 
 
 /*
@@ -1161,6 +1173,7 @@ size_t dns_strlcat(char *, const char *, size_t);
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#define DNS_PP_MIN(a, b) (((a) < (b))? (a) : (b))
 #define DNS_PP_MAX(a, b) (((a) > (b))? (a) : (b))
 #define DNS_PP_NARG_(a, b, c, d, e, f, g, h, i, j, k, N,...) N
 #define DNS_PP_NARG(...)	DNS_PP_NARG_(__VA_ARGS__, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)

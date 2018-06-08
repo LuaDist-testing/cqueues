@@ -1,7 +1,7 @@
 /* ==========================================================================
  * cqueues.h - Lua Continuation Queues
  * --------------------------------------------------------------------------
- * Copyright (c) 2012, 2014  William Ahern
+ * Copyright (c) 2012, 2014, 2015  William Ahern
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -27,15 +27,14 @@
 #define CQUEUES_H
 
 #include <signal.h>	/* sigset_t */
-
-#include <errno.h>	/* EINTR EOVERFLOW */
+#include <errno.h>	/* EOVERFLOW */
+#include <assert.h>     /* static_assert */
 
 #include <sys/param.h>  /* __NetBSD_Version__ OpenBSD __FreeBSD__version */
 #include <sys/types.h>
 #include <sys/socket.h>	/* socketpair(2) */
-
 #include <unistd.h>	/* close(2) pipe(2) */
-#include <fcntl.h>	/* fcntl(2) */
+#include <fcntl.h>	/* F_GETFL F_SETFD F_SETFL FD_CLOEXEC O_NONBLOCK O_CLOEXEC fcntl(2) */
 
 #include <lua.h>
 #include <lualib.h>
@@ -51,15 +50,47 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#ifndef __has_feature
+#define __has_feature(...) 0
+#endif
+
+#ifndef __has_extension
+#define __has_extension(...) 0
+#endif
+
 #ifndef __NetBSD_Prereq__
 #define __NetBSD_Prereq__(M, m, p) 0
 #endif
 
+#define GNUC_PREREQ(M, m) (defined __GNUC__ && ((__GNUC__ > M) || (__GNUC__ == M && __GNUC_MINOR__ >= m)))
+
 #define NETBSD_PREREQ(M, m) __NetBSD_Prereq__(M, m, 0)
 
-#define HAVE_EPOLL  (__linux)
-#define HAVE_PORTS  (__sun)
+#define FREEBSD_PREREQ(M, m) (defined __FreeBSD_version && __FreeBSD_version >= ((M) * 100000) + ((m) * 1000))
+
+#if defined __GLIBC_PREREQ
+#define GLIBC_PREREQ(M, m) (defined __GLIBC__ && __GLIBC_PREREQ(M, m) && !__UCLIBC__)
+#else
+#define GLIBC_PREREQ(M, m) 0
+#endif
+
+#define UCLIBC_PREREQ(M, m, p) (defined __UCLIBC__ && (__UCLIBC_MAJOR__ > M || (__UCLIBC_MAJOR__ == M && __UCLIBC_MINOR__ > m) || (__UCLIBC_MAJOR__ == M && __UCLIBC_MINOR__ == m && __UCLIBC_SUBLEVEL__ >= p)))
+
+#ifndef HAVE_EPOLL
+#define HAVE_EPOLL (__linux)
+#endif
+
+#ifndef HAVE_PORTS
+#define HAVE_PORTS (__sun)
+#endif
+
+#ifndef HAVE_KQUEUE
 #define HAVE_KQUEUE (__FreeBSD__ || __NetBSD__ || __OpenBSD__ || __APPLE__ || __DragonFly__)
+#endif
+
+#ifndef HAVE_EVENTFD
+#define HAVE_EVENTFD (__linux && (GLIBC_PREREQ(2, 9) || UCLIBC_PREREQ(0, 9, 33)))
+#endif
 
 #if __GNUC__
 #define NOTUSED __attribute__((unused))
@@ -81,8 +112,10 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#define cqs_nargs_t int
-#define cqs_error_t int
+#define cqs_index_t int  /* for documentation purposes */
+#define cqs_nargs_t int  /* "" */
+#define cqs_error_t int  /* "" */
+#define cqs_status_t int /* "" */
 
 #define CQS_CQUEUE "Continuation Queue"
 #define CQS_SOCKET "CQS Socket"
@@ -172,14 +205,16 @@ static void cqs_openlibs(lua_State *L) {
 
 
 static inline int cqs_interpose(lua_State *L, const char *mt) {
+	lua_settop(L, 2);
+
 	luaL_getmetatable(L, mt);
 	lua_getfield(L, -1, "__index");
 
-	lua_pushvalue(L, -4); /* push method name */
+	lua_pushvalue(L, 1); /* push method name */
 	lua_gettable(L, -2);  /* push old method */
 
-	lua_pushvalue(L, -5); /* push method name */
-	lua_pushvalue(L, -5); /* push new method */
+	lua_pushvalue(L, 1); /* push method name */
+	lua_pushvalue(L, 2); /* push new method */
 	lua_settable(L, -4);  /* replace old method */
 
 	return 1; /* return old method */
@@ -318,8 +353,13 @@ static inline void cqs_setmacros(lua_State *L, int index, const struct cqs_macro
 
 static inline void cqs_closefd(int *fd) {
 	if (*fd != -1) {
-		while (0 != close(*fd) && errno == EINTR)
-			;;
+#if __APPLE__
+		/* Do we need bother with close$NOCANCEL$UNIX2003? */
+		extern int close$NOCANCEL(int);
+		close$NOCANCEL(*fd);
+#else
+		close(*fd);
+#endif
 		*fd = -1;
 	}
 } /* cqs_closefd() */
@@ -389,7 +429,39 @@ static inline int cqs_socketpair(int family, int type, int proto, int fd[2], int
 
 	return 0;
 #endif
-} /* cqs_pipe2() */
+} /* cqs_socketpair() */
+
+
+#ifndef HAVE_STATIC_ASSERT
+#define HAVE_STATIC_ASSERT (defined static_assert)
+#endif
+
+#ifndef HAVE__STATIC_ASSERT
+#define HAVE__STATIC_ASSERT (GNUC_PREREQ(4, 6) || __has_feature(c_static_assert) || __has_extension(c_static_assert))
+#endif
+
+#if HAVE_STATIC_ASSERT
+#define cqs_static_assert(cond, msg) static_assert(cond, msg)
+#elif HAVE__STATIC_ASSERT
+#define cqs_static_assert(cond, msg) EXTENSION _Static_assert(cond, msg)
+#else
+#define cqs_inline_assert(cond) (sizeof (int[1 - 2*!(cond)]))
+#define cqs_static_assert(cond, msg) extern char CQS_XPASTE(assert_, __LINE__)[cqs_inline_assert(cond)]
+#endif
+
+
+cqs_error_t cqs_strerror_r(cqs_error_t, char *, size_t);
+
+/*
+ * NB: Compound literals have block scope in C. But g++ creates
+ * list-initialized temporaries, which only have expression scope.
+ */
+#if !__cplusplus
+#define cqs_strerror(...) cqs_strerror_(__VA_ARGS__, (char [128]){ 0 }, 128, 0)
+#define cqs_strerror_(error, dst, lim, ...) (cqs_strerror)((error), (dst), (lim))
+#endif
+
+const char *(cqs_strerror)(cqs_error_t, void *, size_t);
 
 
 cqs_error_t cqs_sigmask(int, const sigset_t *, sigset_t *);
@@ -416,6 +488,10 @@ cqs_error_t cqs_sigmask(int, const sigset_t *, sigset_t *);
 #define endof(a) (&(a)[countof(a)])
 #endif
 
+#define cqs_ispowerof2(x) (((x) != 0) && (0 == (((x) - 1) & (x))))
+
+#define CQS_PASTE(x, y) x ## y
+#define CQS_XPASTE(x, y) CQS_PASTE(x, y)
 
 typedef int cqs_ref_t;
 
@@ -462,7 +538,6 @@ static inline cqs_error_t cqs_addzu(size_t *r, size_t a, size_t b) {
 
 #define HAI SAY("hai")
 #endif
-
 
 #include <string.h>
 
